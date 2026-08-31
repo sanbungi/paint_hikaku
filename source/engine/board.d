@@ -13,6 +13,7 @@ class BoardState
     Mask tpl;
     Mask guides;
     Mask user;
+    ubyte[] tplColor; /// カラーお手本（RGBA、なければ線画表示）
     Stroke[] strokes;
     Stroke current;
     bool drawing;
@@ -41,10 +42,11 @@ class BoardState
         user = Mask(CanvasSize, CanvasSize);
     }
 
-    void setTemplate(Mask ink, Mask g, bool clearUser)
+    void setTemplate(Mask ink, Mask g, bool clearUser, ubyte[] colorRgba = null)
     {
         tpl = ink;
         guides = g;
+        tplColor = colorRgba;
         if (clearUser)
             clearInk();
         else

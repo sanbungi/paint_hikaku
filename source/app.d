@@ -617,9 +617,12 @@ final class Studio : VerticalLayout
 
     void openFileDlg()
     {
-        auto dlg = new FileDialog(UIString.fromRaw("線画 PNG をお手本として開く"d), window, null,
+        auto dlg = new FileDialog(UIString.fromRaw("お手本画像を開く"d), window, null,
                 DialogFlag.Modal | DialogFlag.Resizable | FileDialogFlag.Open);
-        dlg.filters = [FileFilterEntry(UIString.fromRaw("PNG 画像"d), "*.png")];
+        dlg.filters = [
+            FileFilterEntry(UIString.fromRaw("画像"d), "*.png;*.jpg;*.jpeg;*.bmp"),
+            FileFilterEntry(UIString.fromRaw("PNG"d), "*.png")
+        ];
         dlg.dialogResult = delegate(Dialog d, const Action result) {
             if (result.id != StandardAction.Open)
                 return;
@@ -643,11 +646,12 @@ final class Studio : VerticalLayout
             status.text = "画像を読めませんでした。"d;
             return;
         }
-        board.setTemplate(maskFromImage(img), Mask(CanvasSize, CanvasSize), true);
+        auto loaded = loadColorTemplate(img);
+        board.setTemplate(loaded.ink, Mask(CanvasSize, CanvasSize), true, loaded.color);
         refreshBoards();
         templateId = "image:" ~ path;
         savedThisResult = false;
-        status.text = to!dstring("お手本: " ~ path);
+        status.text = to!dstring("お手本（カラー）: " ~ path);
         refreshTrend();
         updateDiagLive();
     }
@@ -661,7 +665,8 @@ final class Studio : VerticalLayout
             status.text = "サンプル画像を読めませんでした。"d;
             return;
         }
-        board.setTemplate(maskFromImage(img), Mask(CanvasSize, CanvasSize), true);
+        auto loaded = loadColorTemplate(img);
+        board.setTemplate(loaded.ink, Mask(CanvasSize, CanvasSize), true, loaded.color);
         refreshBoards();
         templateId = "image:sample_house";
         savedThisResult = false;
@@ -670,34 +675,36 @@ final class Studio : VerticalLayout
     }
 }
 
-Mask maskFromImage(ColorDrawBuf img)
+struct LoadedTemplate
 {
-    auto rgba = new ubyte[](CanvasSize * CanvasSize * 4);
-    foreach (y; 0 .. CanvasSize)
+    Mask ink;
+    ubyte[] color;
+}
+
+LoadedTemplate loadColorTemplate(ColorDrawBuf img)
+{
+    int sw = img.width;
+    int sh = img.height;
+    if (sw < 1)
+        sw = 1;
+    if (sh < 1)
+        sh = 1;
+    auto raw = new ubyte[](sw * sh * 4);
+    foreach (y; 0 .. sh)
     {
-        int sy = y * img.height / CanvasSize;
-        if (sy < 0)
-            sy = 0;
-        if (sy >= img.height)
-            sy = img.height - 1;
-        uint* sl = img.scanLine(sy);
-        foreach (x; 0 .. CanvasSize)
+        uint* sl = img.scanLine(y);
+        foreach (x; 0 .. sw)
         {
-            int sx = x * img.width / CanvasSize;
-            if (sx < 0)
-                sx = 0;
-            if (sx >= img.width)
-                sx = img.width - 1;
-            uint p = sl[sx];
-            ubyte r = cast(ubyte)((p >> 16) & 0xFF);
-            ubyte g = cast(ubyte)((p >> 8) & 0xFF);
-            ubyte b = cast(ubyte)(p & 0xFF);
-            size_t o = (y * CanvasSize + x) * 4;
-            rgba[o] = r;
-            rgba[o + 1] = g;
-            rgba[o + 2] = b;
-            rgba[o + 3] = 255;
+            uint p = sl[x];
+            size_t o = (y * sw + x) * 4;
+            raw[o] = cast(ubyte)((p >> 16) & 0xFF);
+            raw[o + 1] = cast(ubyte)((p >> 8) & 0xFF);
+            raw[o + 2] = cast(ubyte)(p & 0xFF);
+            raw[o + 3] = 255;
         }
     }
-    return fromRgbaInk(rgba, CanvasSize, CanvasSize);
+    LoadedTemplate L;
+    L.color = fitRgbaToCanvas(raw, sw, sh, CanvasSize);
+    L.ink = fromRgbaInk(L.color, CanvasSize, CanvasSize);
+    return L;
 }

@@ -193,6 +193,52 @@ Mask binarizeGray(const ubyte[] gray, int w, int h, ubyte threshold = 128, bool 
     return m;
 }
 
+/// 原画像をキャンバスにレターボックス（縦横比を保ち、余白は紙色）。
+ubyte[] fitRgbaToCanvas(const ubyte[] src, int sw, int sh, int size,
+        ubyte pr = 250, ubyte pg = 249, ubyte pb = 245)
+{
+    auto outp = new ubyte[](size * size * 4);
+    foreach (i; 0 .. size * size)
+    {
+        size_t o = i * 4;
+        outp[o] = pr;
+        outp[o + 1] = pg;
+        outp[o + 2] = pb;
+        outp[o + 3] = 255;
+    }
+    if (sw < 1 || sh < 1 || src.length < sw * sh * 4)
+        return outp;
+    import std.algorithm : min;
+    float sc = min(cast(float) size / sw, cast(float) size / sh);
+    int dw = cast(int)(sw * sc);
+    int dh = cast(int)(sh * sc);
+    if (dw < 1)
+        dw = 1;
+    if (dh < 1)
+        dh = 1;
+    int ox = (size - dw) / 2;
+    int oy = (size - dh) / 2;
+    foreach (y; 0 .. dh)
+    {
+        int sy = y * sh / dh;
+        if (sy >= sh)
+            sy = sh - 1;
+        foreach (x; 0 .. dw)
+        {
+            int sx = x * sw / dw;
+            if (sx >= sw)
+                sx = sw - 1;
+            size_t si = (sy * sw + sx) * 4;
+            size_t di = ((oy + y) * size + (ox + x)) * 4;
+            outp[di] = src[si];
+            outp[di + 1] = src[si + 1];
+            outp[di + 2] = src[si + 2];
+            outp[di + 3] = 255;
+        }
+    }
+    return outp;
+}
+
 Mask fromRgbaInk(const ubyte[] rgba, int w, int h)
 {
     auto gray = new ubyte[](w * h);
@@ -217,6 +263,22 @@ unittest
     assert(c.count > 50);
     auto cat = builtinCatalog();
     assert(cat.length == 18);
+    auto red = new ubyte[](2 * 1 * 4);
+    red[0] = 200;
+    red[1] = 10;
+    red[2] = 10;
+    red[3] = 255;
+    red[4] = 200;
+    red[5] = 10;
+    red[6] = 10;
+    red[7] = 255;
+    auto fit = fitRgbaToCanvas(red, 2, 1, 8);
+    assert(fit.length == 8 * 8 * 4);
+    int redN;
+    foreach (i; 0 .. 64)
+        if (fit[i * 4] > 150 && fit[i * 4 + 1] < 40)
+            redN++;
+    assert(redN > 4);
     auto cube = renderBuiltin("solid_cube", 128, 2);
     assert(maskCentroid(cube).count > 40);
 }

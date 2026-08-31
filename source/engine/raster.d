@@ -231,19 +231,47 @@ struct Rgba
     ubyte r, g, b, a;
 }
 
+bool hasColorTpl(const ubyte[] color, int w, int h)
+{
+    return color.length == w * h * 4;
+}
+
+void mixToward(ref ubyte r, ref ubyte g, ref ubyte b, ubyte nr, ubyte ng, ubyte nb, int num = 1, int den = 2)
+{
+    r = cast(ubyte)((r * (den - num) + nr * num) / den);
+    g = cast(ubyte)((g * (den - num) + ng * num) / den);
+    b = cast(ubyte)((b * (den - num) + nb * num) / den);
+}
+
 /// Overlay visualization into packed RGBA8888.
-ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const float[] heatDt = null)
+ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const float[] heatDt = null,
+        const ubyte[] color = null)
 {
     auto outp = new ubyte[](tpl.w * tpl.h * 4);
+    bool col = hasColorTpl(color, tpl.w, tpl.h);
     foreach (i; 0 .. tpl.w * tpl.h)
     {
         bool t = tpl.px[i] != 0;
         bool u = user.px[i] != 0;
+        size_t o = i * 4;
         ubyte r = 245, g = 245, b = 242, a = 255;
+        if (col)
+        {
+            r = color[o];
+            g = color[o + 1];
+            b = color[o + 2];
+        }
         final switch (mode)
         {
         case OverlayMode.overlay:
-            if (t && u)
+            if (col)
+            {
+                if (u && t)
+                    mixToward(r, g, b, 40, 170, 90, 1, 2);
+                else if (u)
+                    mixToward(r, g, b, 210, 60, 70, 2, 3);
+            }
+            else if (t && u)
             {
                 r = 40;
                 g = 170;
@@ -263,7 +291,14 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
             }
             break;
         case OverlayMode.diff:
-            if (t && u)
+            if (col)
+            {
+                if (u && t)
+                    mixToward(r, g, b, 40, 170, 90, 1, 2);
+                else if (u)
+                    mixToward(r, g, b, 220, 40, 40, 2, 3);
+            }
+            else if (t && u)
             {
                 r = 40;
                 g = 170;
@@ -286,7 +321,6 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
             if (u && heatDt !is null)
             {
                 float d = heatDt[i];
-                // 0 = on template (green), far = red
                 float t01 = d / 24.0f;
                 if (t01 > 1)
                     t01 = 1;
@@ -294,7 +328,7 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
                 g = cast(ubyte)(180 - t01 * 160);
                 b = cast(ubyte)(50);
             }
-            else if (t)
+            else if (!col && t)
             {
                 r = 200;
                 g = 200;
@@ -302,8 +336,14 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
             }
             break;
         case OverlayMode.wipe:
-            // スライド比較は ui.canvas.composeWipe を使う。ここは重ねと同じフォールバック。
-            if (t && u)
+            if (col)
+            {
+                if (u && t)
+                    mixToward(r, g, b, 40, 170, 90, 1, 2);
+                else if (u)
+                    mixToward(r, g, b, 210, 60, 70, 2, 3);
+            }
+            else if (t && u)
             {
                 r = 40;
                 g = 170;
@@ -323,7 +363,6 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
             }
             break;
         }
-        size_t o = i * 4;
         outp[o] = r;
         outp[o + 1] = g;
         outp[o + 2] = b;
@@ -346,28 +385,40 @@ ubyte[] composeHiddenSample(int w, int h)
     return outp;
 }
 
-ubyte[] composeSample(const Mask tpl, const Mask guides)
+ubyte[] composeSample(const Mask tpl, const Mask guides, const ubyte[] color = null)
 {
     auto outp = new ubyte[](tpl.w * tpl.h * 4);
     bool hasG = guides.px.length == tpl.px.length;
+    bool col = hasColorTpl(color, tpl.w, tpl.h);
     foreach (i; 0 .. tpl.w * tpl.h)
     {
         bool t = tpl.px[i] != 0;
         bool gd = hasG && guides.px[i] != 0;
-        ubyte r = 250, g = 249, b = 245;
-        if (gd && !t)
-        {
-            r = 210;
-            g = 206;
-            b = 196;
-        }
-        if (t)
-        {
-            r = 50;
-            g = 90;
-            b = 210;
-        }
         size_t o = i * 4;
+        ubyte r = 250, g = 249, b = 245;
+        if (col)
+        {
+            r = color[o];
+            g = color[o + 1];
+            b = color[o + 2];
+            if (gd)
+                mixToward(r, g, b, 180, 176, 160, 1, 3);
+        }
+        else
+        {
+            if (gd && !t)
+            {
+                r = 210;
+                g = 206;
+                b = 196;
+            }
+            if (t)
+            {
+                r = 50;
+                g = 90;
+                b = 210;
+            }
+        }
         outp[o] = r;
         outp[o + 1] = g;
         outp[o + 2] = b;
@@ -398,10 +449,11 @@ ubyte[] composePaper(const Mask user)
     return outp;
 }
 
-ubyte[] composeWipe(const Mask tpl, const Mask user, const Mask guides, int wipePct)
+ubyte[] composeWipe(const Mask tpl, const Mask user, const Mask guides, int wipePct, const ubyte[] color = null)
 {
     auto outp = new ubyte[](tpl.w * tpl.h * 4);
     bool hasG = guides.px.length == tpl.px.length;
+    bool col = hasColorTpl(color, tpl.w, tpl.h);
     int split = wipePct * tpl.w / 100;
     if (split < 0)
         split = 0;
@@ -414,17 +466,26 @@ ubyte[] composeWipe(const Mask tpl, const Mask user, const Mask guides, int wipe
             ubyte r = 250, g = 249, b = 245;
             if (x < split)
             {
-                if (hasG && guides.px[i] && !tpl.px[i])
+                if (col)
                 {
-                    r = 210;
-                    g = 206;
-                    b = 196;
+                    r = color[i * 4];
+                    g = color[i * 4 + 1];
+                    b = color[i * 4 + 2];
                 }
-                if (tpl.px[i])
+                else
                 {
-                    r = 50;
-                    g = 90;
-                    b = 210;
+                    if (hasG && guides.px[i] && !tpl.px[i])
+                    {
+                        r = 210;
+                        g = 206;
+                        b = 196;
+                    }
+                    if (tpl.px[i])
+                    {
+                        r = 50;
+                        g = 90;
+                        b = 210;
+                    }
                 }
             }
             else
@@ -461,4 +522,16 @@ unittest
     auto c = maskCentroid(m);
     assert(c.count > 10);
     assert(c.x > 12 && c.x < 20);
+
+    auto color = new ubyte[](32 * 32 * 4);
+    foreach (i; 0 .. 32 * 32)
+    {
+        color[i * 4] = 10;
+        color[i * 4 + 1] = 200;
+        color[i * 4 + 2] = 30;
+        color[i * 4 + 3] = 255;
+    }
+    Mask empty = Mask(32, 32);
+    auto samp = composeSample(empty, empty, color);
+    assert(samp[0] == 10 && samp[1] == 200 && samp[2] == 30);
 }

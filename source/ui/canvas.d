@@ -155,19 +155,19 @@ class BoardView : CanvasWidget
         else if (st.resultMode)
         {
             if (st.overlay == OverlayMode.wipe)
-                rgba = composeWipe(st.tpl, showUser, st.guides, st.wipePct);
+                rgba = composeWipe(st.tpl, showUser, st.guides, st.wipePct, st.tplColor);
             else
             {
                 float[] heat;
                 if (st.overlay == OverlayMode.heat)
                     heat = distanceTransform(st.tpl);
-                rgba = composeOverlay(st.tpl, showUser, st.overlay, heat);
+                rgba = composeOverlay(st.tpl, showUser, st.overlay, heat, st.tplColor);
             }
             overlayGuides(rgba, pg, CanvasSize, CanvasSize, 180, 186, 196);
         }
         else
         {
-            rgba = composeSample(st.tpl, st.guides);
+            rgba = composeSample(st.tpl, st.guides, st.tplColor);
             overlayGuides(rgba, pg, CanvasSize, CanvasSize, 190, 188, 178);
         }
 
