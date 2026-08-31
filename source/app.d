@@ -19,15 +19,20 @@ import std.conv : to;
 import std.format : format;
 import std.array : join;
 import std.algorithm : min, max;
+import std.math : abs;
 
 mixin APP_ENTRY_POINT;
 
 extern (C) int UIAppMain(string[] args)
 {
     installUiFonts();
-    auto win = Platform.instance.createWindow("paint_hikaku", null, WindowFlag.Resizable, 1480, 1000);
+    auto win = Platform.instance.createWindow("paint_hikaku", null, WindowFlag.Resizable, 1600, 900);
     auto studio = new Studio();
     win.mainWidget = studio;
+    win.windowStateChanged = delegate(Window w, WindowState st, Rect rc) {
+        studio.onWindowState(st, rc);
+        return true;
+    };
     win.show();
     if (args.length > 1)
         studio.openImagePath(args[1]);
@@ -40,10 +45,16 @@ final class Studio : VerticalLayout
     BoardView sampleView;
     BoardView paperView;
     LinearLayout canvasFrame;
+    LinearLayout actionStrip;
     TextWidget labSample;
     TextWidget labPaper;
+    ComboBox layCombo;
     EditBox trendText;
     ulong peekTimerId;
+    ulong aspectTimerId;
+    bool snappingAspect;
+    int lastWinW = 1600;
+    int lastWinH = 900;
     SliderWidget slWipe;
     TextWidget labWipe;
     StringListWidget tplList;
@@ -67,40 +78,19 @@ final class Studio : VerticalLayout
     {
         super("studio");
         layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
-        padding(Rect(8, 8, 8, 8));
+        padding(Rect(4, 4, 4, 4));
         fontFace = "AppUI";
         fontSize = makePointSize(11);
         catalog = builtinCatalog();
 
         auto bar = new HorizontalLayout();
         bar.layoutWidth(FILL_PARENT);
-        btnUndo = new Button("undo", "アンドゥ"d);
-        btnClear = new Button("clear", "クリア"d);
-        btnCheck = new Button("check", "答え合わせ"d);
-        btnAgain = new Button("again", "もう一度"d);
-        btnSave = new Button("save", "記録"d);
         auto btnOpen = new Button("open", "画像を開く…"d);
         auto btnSample = new Button("sample", "サンプル画像"d);
-        btnUndo.click = delegate(Widget w) { board.undo(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
-        btnClear.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
-        btnCheck.click = delegate(Widget w) { doCheck(); return true; };
-        btnAgain.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
-        btnSave.click = delegate(Widget w) { persist(); return true; };
         btnOpen.click = delegate(Widget w) { openFileDlg(); return true; };
         btnSample.click = delegate(Widget w) { loadEmbeddedSample(); return true; };
-        bar.addChild(btnUndo);
-        bar.addChild(btnClear);
-        bar.addChild(btnCheck);
-        bar.addChild(btnAgain);
-        bar.addChild(btnSave);
-        bar.addChild(new HSpacer());
-        bar.addChild(btnOpen);
-        bar.addChild(btnSample);
-        addChild(bar);
-
-        auto bar2 = new HorizontalLayout();
-        bar2.layoutWidth(FILL_PARENT);
-        auto layCombo = new ComboBox("lay", ["上下に並べる"d, "左右に並べる"d]);
+        layCombo = new ComboBox("lay", ["上下に並べる"d, "左右に並べる"d]);
+        layCombo.selectedItemIndex = 1;
         layCombo.itemClick = delegate(Widget w, int i) {
             setSideBySide(i == 1);
             return true;
@@ -139,21 +129,38 @@ final class Studio : VerticalLayout
             board.usePressure = c;
             return true;
         };
-        bar2.addChild(new TextWidget(null, "配置"d));
-        bar2.addChild(layCombo);
-        bar2.addChild(gridCombo);
-        bar2.addChild(chkBox);
-        bar2.addChild(chkMem);
-        bar2.addChild(btnPeek);
-        bar2.addChild(chkPr);
-        addChild(bar2);
+        bar.addChild(new TextWidget(null, "配置"d));
+        bar.addChild(layCombo);
+        bar.addChild(gridCombo);
+        bar.addChild(chkBox);
+        bar.addChild(chkMem);
+        bar.addChild(btnPeek);
+        bar.addChild(chkPr);
+        bar.addChild(new HSpacer());
+        bar.addChild(btnOpen);
+        bar.addChild(btnSample);
+        addChild(bar);
+
+        btnUndo = new Button("undo", "アンドゥ"d);
+        btnClear = new Button("clear", "クリア"d);
+        btnCheck = new Button("check", "答え合わせ"d);
+        btnAgain = new Button("again", "もう一度"d);
+        btnSave = new Button("save", "記録"d);
+        btnUndo.click = delegate(Widget w) { board.undo(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
+        btnClear.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
+        btnCheck.click = delegate(Widget w) { doCheck(); return true; };
+        btnAgain.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
+        btnSave.click = delegate(Widget w) { persist(); return true; };
+        foreach (b; [btnUndo, btnClear, btnCheck, btnAgain, btnSave])
+            b.layoutWidth(FILL_PARENT);
 
         auto body = new HorizontalLayout();
         body.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
 
         auto left = new VerticalLayout();
-        left.minWidth = 240;
-        left.maxWidth = 280;
+        left.minWidth = 220;
+        left.maxWidth = 250;
+        left.layoutWidth(250);
         left.layoutHeight(FILL_PARENT);
         left.addChild(new TextWidget(null, "お手本"d).fontSize(18));
         dstring[] names;
@@ -168,7 +175,7 @@ final class Studio : VerticalLayout
         };
         left.addChild(tplCombo);
         tplList = new StringListWidget("tpls", names);
-        tplList.layoutWidth(FILL_PARENT).layoutHeight(280);
+        tplList.layoutWidth(FILL_PARENT).layoutHeight(200);
         tplList.itemSelected = delegate(Widget src, int index) {
             applyTemplateIndex(index);
             return true;
@@ -267,8 +274,10 @@ final class Studio : VerticalLayout
         board.onChanged = &updateDiagLive;
         sampleView = new BoardView(board, ViewRole.sample, "sample");
         paperView = new BoardView(board, ViewRole.paper, "paper");
-        labSample = new TextWidget(null, "見本 — 見て覚える。紙には出さない。"d);
-        labPaper = new TextWidget(null, "キャンバス — 白い紙に模写する。"d);
+        labSample = new TextWidget(null, "見本"d);
+        labSample.layoutWidth(FILL_PARENT);
+        labPaper = new TextWidget(null, "キャンバス"d);
+        labPaper.layoutWidth(FILL_PARENT);
         auto sampleCol = new VerticalLayout();
         sampleCol.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
         sampleCol.layoutWeight = 1;
@@ -279,16 +288,30 @@ final class Studio : VerticalLayout
         paperCol.layoutWeight = 1;
         paperCol.addChild(labPaper);
         paperCol.addChild(paperView);
-        canvasFrame = new VerticalLayout("canvasFrame");
+        actionStrip = new VerticalLayout("actions");
+        auto padTop = new VSpacer();
+        padTop.layoutWeight = 1;
+        auto padBot = new VSpacer();
+        padBot.layoutWeight = 1;
+        actionStrip.addChild(padTop);
+        actionStrip.addChild(btnCheck);
+        actionStrip.addChild(btnAgain);
+        actionStrip.addChild(btnUndo);
+        actionStrip.addChild(btnClear);
+        actionStrip.addChild(btnSave);
+        actionStrip.addChild(padBot);
+        canvasFrame = new HorizontalLayout("canvasFrame");
         canvasFrame.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
         canvasFrame.layoutWeight = 3;
         canvasFrame.addChild(sampleCol);
+        canvasFrame.addChild(actionStrip);
         canvasFrame.addChild(paperCol);
         body.addChild(canvasFrame);
 
         auto right = new VerticalLayout();
-        right.minWidth = 320;
-        right.layoutWidth(360).layoutHeight(FILL_PARENT);
+        right.minWidth = 280;
+        right.maxWidth = 320;
+        right.layoutWidth(300).layoutHeight(FILL_PARENT);
         right.addChild(new TextWidget(null, "答え合わせ"d).fontSize(18));
         overlayCombo = new ComboBox("ovl", [
             "重ね（青=お手本 / 赤=自分 / 緑=一致）"d,
@@ -345,6 +368,7 @@ final class Studio : VerticalLayout
         reloadHistory();
         selectShape("circle");
         tplList.selectedItemIndex = 1; // 円
+        setSideBySide(true);
     }
 
     void applyTemplateIndex(int index)
@@ -487,21 +511,92 @@ final class Studio : VerticalLayout
 
     void setSideBySide(bool side)
     {
-        if (canvasFrame is null)
+        if (canvasFrame is null || actionStrip is null)
             return;
         canvasFrame.orientation = side ? Orientation.Horizontal : Orientation.Vertical;
+        actionStrip.orientation = side ? Orientation.Vertical : Orientation.Horizontal;
         if (side)
         {
-            labSample.text = "見本（左）— 見て覚える。"d;
-            labPaper.text = "キャンバス（右）— 白い紙に模写。"d;
+            labSample.text = "見本"d;
+            labPaper.text = "キャンバス"d;
+            actionStrip.minWidth = 108;
+            actionStrip.maxWidth = 128;
+            actionStrip.layoutWidth = 118;
+            actionStrip.layoutHeight = FILL_PARENT;
+            actionStrip.minHeight = 0;
+            actionStrip.maxHeight = 10000;
+            foreach (b; [btnUndo, btnClear, btnCheck, btnAgain, btnSave])
+                b.layoutWidth(FILL_PARENT);
         }
         else
         {
-            labSample.text = "見本（上）— 見て覚える。下には出さない。"d;
-            labPaper.text = "キャンバス（下）— 白い紙に模写する。"d;
+            labSample.text = "見本"d;
+            labPaper.text = "キャンバス"d;
+            actionStrip.minWidth = 0;
+            actionStrip.maxWidth = 10000;
+            actionStrip.layoutWidth = FILL_PARENT;
+            actionStrip.minHeight = 36;
+            actionStrip.maxHeight = 44;
+            actionStrip.layoutHeight = 40;
+            foreach (b; [btnUndo, btnClear, btnCheck, btnAgain, btnSave])
+                b.layoutWidth(WRAP_CONTENT);
         }
         requestLayout();
         refreshBoards();
+    }
+
+    void onWindowState(WindowState st, Rect)
+    {
+        if (st == WindowState.maximized || st == WindowState.fullscreen
+                || st == WindowState.minimized || st == WindowState.hidden)
+            return;
+        if (snappingAspect)
+            return;
+        if (aspectTimerId)
+            cancelTimer(aspectTimerId);
+        aspectTimerId = setTimer(140);
+    }
+
+    void snapSixteenNine()
+    {
+        auto w = window;
+        if (w is null)
+            return;
+        auto st = w.windowState;
+        if (st == WindowState.maximized || st == WindowState.fullscreen)
+            return;
+        int dw = w.width;
+        int dh = w.height;
+        if (dw < 640 || dh < 360)
+            return;
+        int wantH = (dw * 9 + 8) / 16;
+        int wantW = (dh * 16 + 8) / 9;
+        if (abs(wantH - dh) <= 10 || abs(wantW - dw) <= 16)
+        {
+            lastWinW = dw;
+            lastWinH = dh;
+            return;
+        }
+        int ndw, ndh;
+        if (abs(dw - lastWinW) >= abs(dh - lastWinH))
+        {
+            ndw = dw;
+            ndh = wantH;
+        }
+        else
+        {
+            ndw = wantW;
+            ndh = dh;
+        }
+        if (ndw < 960)
+            ndw = 960;
+        if (ndh < 540)
+            ndh = 540;
+        snappingAspect = true;
+        w.resizeWindow(dlangui.core.types.Point(ndw, ndh));
+        snappingAspect = false;
+        lastWinW = ndw;
+        lastWinH = ndh;
     }
 
     override bool onTimer(ulong id)
@@ -510,6 +605,11 @@ final class Studio : VerticalLayout
         {
             board.peeking = false;
             refreshBoards();
+            return false;
+        }
+        if (id == aspectTimerId)
+        {
+            snapSixteenNine();
             return false;
         }
         return super.onTimer(id);

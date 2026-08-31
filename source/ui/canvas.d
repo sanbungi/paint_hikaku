@@ -75,11 +75,10 @@ class BoardView : CanvasWidget
         styleId = STYLE_EDIT_BOX;
         clickable = (role == ViewRole.paper);
         focusable = (role == ViewRole.paper);
-        layoutWidth(CanvasSize).layoutHeight(CanvasSize);
-        minWidth = 160;
-        minHeight = 160;
-        maxWidth = CanvasSize;
-        maxHeight = CanvasSize;
+        layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
+        layoutWeight = 1;
+        minWidth = 200;
+        minHeight = 200;
         pix = new ColorDrawBuf(CanvasSize, CanvasSize);
         onDrawListener = &paint;
     }
@@ -183,7 +182,7 @@ class BoardView : CanvasWidget
             }
         }
         pix.invalidate();
-        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, CanvasSize);
+        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, int.max, SquareAlign.top);
         if (sv.empty)
             return;
         buf.fillRect(rc, 0xE8E6E0);
@@ -192,7 +191,7 @@ class BoardView : CanvasWidget
 
     Rect squareFrom(Rect rc)
     {
-        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, CanvasSize);
+        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, int.max, SquareAlign.top);
         if (sv.empty)
             return Rect.init;
         return Rect(sv.x, sv.y, sv.x + sv.w, sv.y + sv.h);
@@ -208,15 +207,11 @@ class BoardView : CanvasWidget
 
     override void measure(int parentWidth, int parentHeight)
     {
-        measuredContent(parentWidth, parentHeight, CanvasSize, CanvasSize);
-    }
-
-    override void layout(Rect rc)
-    {
-        Rect sq = squareFrom(rc);
-        if (sq.empty)
-            super.layout(rc);
-        else
-            super.layout(sq);
+        int w = 320, h = 320;
+        if (parentWidth != SIZE_UNSPECIFIED && parentWidth > 0)
+            w = parentWidth;
+        if (parentHeight != SIZE_UNSPECIFIED && parentHeight > 0)
+            h = parentHeight;
+        measuredContent(parentWidth, parentHeight, w, h);
     }
 }
