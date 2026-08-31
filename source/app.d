@@ -39,6 +39,11 @@ final class Studio : VerticalLayout
     BoardState board;
     BoardView sampleView;
     BoardView paperView;
+    LinearLayout canvasFrame;
+    TextWidget labSample;
+    TextWidget labPaper;
+    EditBox trendText;
+    ulong peekTimerId;
     SliderWidget slWipe;
     TextWidget labWipe;
     StringListWidget tplList;
@@ -92,6 +97,56 @@ final class Studio : VerticalLayout
         bar.addChild(btnOpen);
         bar.addChild(btnSample);
         addChild(bar);
+
+        auto bar2 = new HorizontalLayout();
+        bar2.layoutWidth(FILL_PARENT);
+        auto layCombo = new ComboBox("lay", ["上下に並べる"d, "左右に並べる"d]);
+        layCombo.itemClick = delegate(Widget w, int i) {
+            setSideBySide(i == 1);
+            return true;
+        };
+        auto gridCombo = new ComboBox("grid", ["グリッドなし"d, "2分割"d, "3×3"d, "4×4"d]);
+        gridCombo.itemClick = delegate(Widget w, int i) {
+            int[] ns = [0, 2, 3, 4];
+            board.gridN = ns[i];
+            refreshBoards();
+            return true;
+        };
+        auto chkBox = new CheckBox("bbox", "外接箱"d);
+        chkBox.checkChange = delegate(Widget w, bool c) {
+            board.showBBox = c;
+            refreshBoards();
+            return true;
+        };
+        auto chkMem = new CheckBox("mem", "記憶模写"d);
+        chkMem.checkChange = delegate(Widget w, bool c) {
+            board.memoryMode = c;
+            board.peeking = false;
+            refreshBoards();
+            updateDiagLive();
+            return true;
+        };
+        auto btnPeek = new Button("peek", "チラ見"d);
+        btnPeek.click = delegate(Widget w) {
+            board.peeking = true;
+            refreshBoards();
+            peekTimerId = setTimer(1800);
+            return true;
+        };
+        auto chkPr = new CheckBox("pr", "筆圧（マウスはShift細/Ctrl太）"d);
+        chkPr.checked = true;
+        chkPr.checkChange = delegate(Widget w, bool c) {
+            board.usePressure = c;
+            return true;
+        };
+        bar2.addChild(new TextWidget(null, "配置"d));
+        bar2.addChild(layCombo);
+        bar2.addChild(gridCombo);
+        bar2.addChild(chkBox);
+        bar2.addChild(chkMem);
+        bar2.addChild(btnPeek);
+        bar2.addChild(chkPr);
+        addChild(bar2);
 
         auto body = new HorizontalLayout();
         body.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
@@ -199,19 +254,36 @@ final class Studio : VerticalLayout
         histList = new StringListWidget("hist");
         histList.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
         left.addChild(histList);
+        left.addChild(new TextWidget(null, "この題材の傾向"d).fontSize(14));
+        trendText = new EditBox("trend");
+        trendText.readOnly = true;
+        trendText.fontSize(13);
+        trendText.layoutWidth(FILL_PARENT).layoutHeight(90);
+        trendText.text = "記録すると、同じ題材のクセがここに溜まります。"d;
+        left.addChild(trendText);
         body.addChild(left);
 
         board = new BoardState();
         board.onChanged = &updateDiagLive;
         sampleView = new BoardView(board, ViewRole.sample, "sample");
         paperView = new BoardView(board, ViewRole.paper, "paper");
-        auto canvasFrame = new VerticalLayout();
+        labSample = new TextWidget(null, "見本 — 見て覚える。紙には出さない。"d);
+        labPaper = new TextWidget(null, "キャンバス — 白い紙に模写する。"d);
+        auto sampleCol = new VerticalLayout();
+        sampleCol.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
+        sampleCol.layoutWeight = 1;
+        sampleCol.addChild(labSample);
+        sampleCol.addChild(sampleView);
+        auto paperCol = new VerticalLayout();
+        paperCol.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
+        paperCol.layoutWeight = 1;
+        paperCol.addChild(labPaper);
+        paperCol.addChild(paperView);
+        canvasFrame = new VerticalLayout("canvasFrame");
         canvasFrame.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
         canvasFrame.layoutWeight = 3;
-        canvasFrame.addChild(new TextWidget(null, "見本（上）— 見て覚える。下には出さない。"d));
-        canvasFrame.addChild(sampleView);
-        canvasFrame.addChild(new TextWidget(null, "キャンバス（下）— 真っ白な紙に模写する。"d));
-        canvasFrame.addChild(paperView);
+        canvasFrame.addChild(sampleCol);
+        canvasFrame.addChild(paperCol);
         body.addChild(canvasFrame);
 
         auto right = new VerticalLayout();
@@ -290,6 +362,7 @@ final class Studio : VerticalLayout
         templateId = id;
         savedThisResult = false;
         applyPersp(true);
+        refreshTrend();
         updateDiagLive();
     }
 
@@ -330,7 +403,12 @@ final class Studio : VerticalLayout
     void updateDiagLive()
     {
         if (!board.resultMode)
-            diagText.text = "下の白い紙に描き、「答え合わせ」で上の見本へ合成します。スライド比較も選べます。"d;
+        {
+            if (board.memoryMode)
+                diagText.text = "記憶模写: 見本は隠しています。「チラ見」で数秒だけ出せます。描いて答え合わせ。"d;
+            else
+                diagText.text = "題材を選び、白い紙に描き、「答え合わせ」で採点します。"d;
+        }
     }
 
     void refreshBoards()
@@ -397,6 +475,44 @@ final class Studio : VerticalLayout
         if (!lines.length)
             lines = ["（まだ記録がありません）"d];
         histList.items = lines;
+        refreshTrend();
+    }
+
+    void refreshTrend()
+    {
+        if (trendText is null)
+            return;
+        trendText.text = to!dstring(formatTrend(trendFor(recs, templateId), templateId));
+    }
+
+    void setSideBySide(bool side)
+    {
+        if (canvasFrame is null)
+            return;
+        canvasFrame.orientation = side ? Orientation.Horizontal : Orientation.Vertical;
+        if (side)
+        {
+            labSample.text = "見本（左）— 見て覚える。"d;
+            labPaper.text = "キャンバス（右）— 白い紙に模写。"d;
+        }
+        else
+        {
+            labSample.text = "見本（上）— 見て覚える。下には出さない。"d;
+            labPaper.text = "キャンバス（下）— 白い紙に模写する。"d;
+        }
+        requestLayout();
+        refreshBoards();
+    }
+
+    override bool onTimer(ulong id)
+    {
+        if (id == peekTimerId)
+        {
+            board.peeking = false;
+            refreshBoards();
+            return false;
+        }
+        return super.onTimer(id);
     }
 
     void openFileDlg()
@@ -432,6 +548,7 @@ final class Studio : VerticalLayout
         templateId = "image:" ~ path;
         savedThisResult = false;
         status.text = to!dstring("お手本: " ~ path);
+        refreshTrend();
         updateDiagLive();
     }
 

@@ -7,8 +7,51 @@ import engine.raster;
 import engine.compare;
 import engine.board;
 import engine.viewgeom;
+import engine.grid;
 import std.algorithm : max, min;
 import std.math : sqrt;
+
+float pollTouchPressure()
+{
+    float p = -1;
+    try
+    {
+        import bindbc.sdl;
+        int nd = SDL_GetNumTouchDevices();
+        foreach (i; 0 .. nd)
+        {
+            auto id = SDL_GetTouchDevice(i);
+            int nf = SDL_GetNumTouchFingers(id);
+            foreach (j; 0 .. nf)
+            {
+                auto f = SDL_GetTouchFinger(id, j);
+                if (f !is null && f.pressure > 0)
+                {
+                    if (f.pressure > p)
+                        p = f.pressure;
+                }
+            }
+        }
+    }
+    catch (Exception)
+    {
+    }
+    return p;
+}
+
+float pressureFromEvent(MouseEvent event, bool usePressure)
+{
+    if (!usePressure)
+        return 1.0f;
+    float t = pollTouchPressure();
+    if (t > 0)
+        return t;
+    if (event.flags & MouseFlag.Shift)
+        return 0.4f;
+    if (event.flags & MouseFlag.Control)
+        return 1.55f;
+    return 1.0f;
+}
 
 public import engine.board : BoardState;
 
@@ -59,7 +102,7 @@ class BoardView : CanvasWidget
             setFocus();
             st.drawing = true;
             st.current = Stroke.init;
-            st.addPoint(lx, ly, 1.0f);
+            st.addPoint(lx, ly, pressureFromEvent(event, st.usePressure));
             invalidatePair();
             return true;
         }
@@ -67,7 +110,7 @@ class BoardView : CanvasWidget
         {
             if (inside)
             {
-                st.addPoint(lx, ly, 1.0f);
+                st.addPoint(lx, ly, pressureFromEvent(event, st.usePressure));
                 invalidatePair();
             }
             return true;
@@ -102,8 +145,14 @@ class BoardView : CanvasWidget
     {
         auto showUser = st.userAligned();
         ubyte[] rgba;
+        auto pg = practiceGuides(CanvasSize, st.gridN, st.tpl, st.showBBox);
         if (role == ViewRole.paper)
+        {
             rgba = composePaper(showUser);
+            overlayGuides(rgba, pg, CanvasSize, CanvasSize, 200, 205, 215);
+        }
+        else if (!st.sampleVisible)
+            rgba = composeHiddenSample(CanvasSize, CanvasSize);
         else if (st.resultMode)
         {
             if (st.overlay == OverlayMode.wipe)
@@ -115,9 +164,13 @@ class BoardView : CanvasWidget
                     heat = distanceTransform(st.tpl);
                 rgba = composeOverlay(st.tpl, showUser, st.overlay, heat);
             }
+            overlayGuides(rgba, pg, CanvasSize, CanvasSize, 180, 186, 196);
         }
         else
+        {
             rgba = composeSample(st.tpl, st.guides);
+            overlayGuides(rgba, pg, CanvasSize, CanvasSize, 190, 188, 178);
+        }
 
         foreach (y; 0 .. CanvasSize)
         {

@@ -20,7 +20,19 @@ class BoardState
     AlignMode alignMode = AlignMode.none;
     OverlayMode overlay = OverlayMode.overlay;
     int wipePct = 50;
+    int gridN = 0; /// 0=なし, 2/3/4 分割
+    bool showBBox;
+    bool memoryMode;
+    bool peeking;
+    bool usePressure = true;
     void delegate() onChanged;
+
+    bool sampleVisible() const
+    {
+        if (!memoryMode)
+            return true;
+        return resultMode || peeking;
+    }
 
     this()
     {

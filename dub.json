@@ -8,7 +8,8 @@
 	"importPaths": ["source"],
 	"stringImportPaths": ["assets"],
 	"dependencies": {
-		"dlangui": "~>0.10.8"
+		"dlangui": "~>0.10.8",
+		"bindbc-sdl": "~>1.4.5"
 	},
 	"versions": [
 		"SDL_204"

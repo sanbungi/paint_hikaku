@@ -11,6 +11,7 @@ import engine.solids;
 import engine.board;
 import engine.viewgeom;
 import engine.fontpaths;
+import engine.grid;
 import std.math : abs;
 import std.algorithm : canFind;
 
@@ -199,6 +200,35 @@ unittest
     assert(hasCircle && hasCube);
     assert(isSolidId("solid_cube"));
     assert(!isSolidId("circle"));
+    bool hasDrill;
+    foreach (t; cat)
+        if (t.kind == "drill")
+            hasDrill = true;
+    assert(hasDrill);
+}
+
+/// グリッドは採点マスクと独立
+unittest
+{
+    auto tpl = renderBuiltin("circle", 64, 3);
+    auto g = practiceGuides(64, 3, tpl, true);
+    int gn, tn;
+    foreach (i; 0 .. tpl.px.length)
+    {
+        if (g.px[i])
+            gn++;
+        if (tpl.px[i])
+            tn++;
+    }
+    assert(gn > 50);
+    auto st = new BoardState();
+    st.memoryMode = true;
+    assert(!st.sampleVisible);
+    st.peeking = true;
+    assert(st.sampleVisible);
+    st.peeking = false;
+    st.resultMode = true;
+    assert(st.sampleVisible);
 }
 
 /// 同一マスクの IoU は 1。平行移動で dx が出る

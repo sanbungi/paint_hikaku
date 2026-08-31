@@ -88,6 +88,84 @@ SessionRecord[] loadRecent(int limit = 24)
     return recs;
 }
 
+struct TrendStats
+{
+    int n;
+    float meanIou = 0;
+    float meanDx = 0;
+    float meanDy = 0;
+    float meanScale = 1;
+    float meanJitter = 0;
+    float lastIou = 0;
+    float prevIou = 0;
+    string habitJa;
+}
+
+TrendStats trendFor(SessionRecord[] recs, string templateId)
+{
+    TrendStats t;
+    SessionRecord[] hit;
+    foreach (r; recs)
+        if (r.templateId == templateId)
+            hit ~= r;
+    t.n = cast(int) hit.length;
+    if (!t.n)
+    {
+        t.habitJa = "この題材の記録はまだありません。";
+        return t;
+    }
+    double iou, dx, dy, sc, jit;
+    iou = dx = dy = sc = jit = 0;
+    foreach (r; hit)
+    {
+        iou += r.metrics.iou;
+        dx += r.metrics.dx;
+        dy += r.metrics.dy;
+        sc += r.metrics.scaleRatio;
+        jit += r.metrics.jitter;
+    }
+    t.meanIou = cast(float)(iou / t.n);
+    t.meanDx = cast(float)(dx / t.n);
+    t.meanDy = cast(float)(dy / t.n);
+    t.meanScale = cast(float)(sc / t.n);
+    t.meanJitter = cast(float)(jit / t.n);
+    t.lastIou = hit[$ - 1].metrics.iou;
+    if (t.n >= 2)
+        t.prevIou = hit[$ - 2].metrics.iou;
+
+    string[] habits;
+    import std.math : abs;
+    if (abs(t.meanDx) > 14 && abs(t.meanDx) >= abs(t.meanDy))
+        habits ~= t.meanDx > 0 ? "右に寄る" : "左に寄る";
+    else if (abs(t.meanDy) > 14)
+        habits ~= t.meanDy > 0 ? "下に寄る" : "上に寄る";
+    if (t.meanScale < 0.88f)
+        habits ~= "小さめ";
+    else if (t.meanScale > 1.14f)
+        habits ~= "大きめ";
+    if (t.meanJitter > 2.2f)
+        habits ~= "線が揺れやすい";
+    if (!habits.length)
+        t.habitJa = "目立ったクセの偏りはありません。";
+    else
+    {
+        import std.array : join;
+        t.habitJa = "傾向: " ~ habits.join("・");
+    }
+    return t;
+}
+
+string formatTrend(TrendStats t, string templateId)
+{
+    import std.format : format;
+    if (t.n == 0)
+        return t.habitJa;
+    string delta;
+    if (t.n >= 2)
+        delta = format("  前回比 IoU %+.2f", t.lastIou - t.prevIou);
+    return format("%s  %d回  平均IoU %.2f%s\n%s", templateId, t.n, t.meanIou, delta, t.habitJa);
+}
+
 SessionRecord parseRecord(string text)
 {
     auto j = parseJSON(text);
@@ -121,7 +199,22 @@ SessionRecord parseRecord(string text)
 
 unittest
 {
+    import std.algorithm : canFind;
     auto tmp = parseRecord(`{"isoTime":"t","templateId":"circle","alignMode":"none","commentsJa":["x"],"metrics":{"iou":0.5}}`);
     assert(tmp.templateId == "circle");
     assert(tmp.metrics.iou == 0.5);
+
+    SessionRecord a, b;
+    a.templateId = "circle";
+    a.metrics.dx = 30;
+    a.metrics.scaleRatio = 0.7;
+    a.metrics.iou = 0.2;
+    b.templateId = "circle";
+    b.metrics.dx = 20;
+    b.metrics.scaleRatio = 0.8;
+    b.metrics.iou = 0.4;
+    auto tr = trendFor([a, b], "circle");
+    assert(tr.n == 2);
+    assert(tr.habitJa.canFind("右") || tr.habitJa.canFind("小さめ"));
+    assert(formatTrend(tr, "circle").length > 10);
 }

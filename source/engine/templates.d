@@ -22,6 +22,9 @@ TemplateDef[] builtinCatalog()
         TemplateDef("pentagon", "正五角形", "shape"),
         TemplateDef("cross", "十字", "shape"),
         TemplateDef("curve_s", "S曲線", "shape"),
+        TemplateDef("drill_2dots", "線練習: 2点を結ぶ", "drill"),
+        TemplateDef("drill_angles", "線練習: 斜め3本", "drill"),
+        TemplateDef("drill_circles", "線練習: 円3つ", "drill"),
         TemplateDef("solid_cube", "立方体", "solid"),
         TemplateDef("solid_box", "直方体", "solid"),
         TemplateDef("solid_cylinder", "円柱", "solid"),
@@ -141,6 +144,36 @@ Mask renderBuiltin(string id, int size = CanvasSize, float width = DefaultStroke
             rasterizePolyline(m, pts, width);
             break;
         }
+    case "drill_2dots":
+        stampDisc(m, cx - s, cy, width * 1.4f);
+        stampDisc(m, cx + s, cy, width * 1.4f);
+        break;
+    case "drill_angles":
+        stampDisc(m, cx - s, cy + s * 0.5f, width * 1.2f);
+        stampDisc(m, cx + s, cy - s * 0.5f, width * 1.2f);
+        stampDisc(m, cx - s * 0.2f, cy - s, width * 1.2f);
+        stampDisc(m, cx + s * 0.6f, cy + s, width * 1.2f);
+        stampDisc(m, cx - s, cy - s * 0.15f, width * 1.2f);
+        stampDisc(m, cx + s * 0.15f, cy + s * 0.7f, width * 1.2f);
+        break;
+    case "drill_circles":
+        {
+            void ring(float ox, float oy, float rad)
+            {
+                Point[] pts;
+                enum N = 48;
+                foreach (i; 0 .. N)
+                {
+                    float a = (2 * PI * i) / N;
+                    pts ~= P(ox + rad * cos(a), oy + rad * sin(a));
+                }
+                rasterizePolyline(m, pts, width, true);
+            }
+            ring(cx - s * 0.55f, cy, s * 0.38f);
+            ring(cx + s * 0.35f, cy - s * 0.35f, s * 0.28f);
+            ring(cx + s * 0.25f, cy + s * 0.45f, s * 0.22f);
+            break;
+        }
     default:
         rasterizePolyline(m, [P(cx - s, cy), P(cx + s, cy)], width);
         break;
@@ -183,7 +216,7 @@ unittest
     auto c = maskCentroid(m);
     assert(c.count > 50);
     auto cat = builtinCatalog();
-    assert(cat.length == 15);
+    assert(cat.length == 18);
     auto cube = renderBuiltin("solid_cube", 128, 2);
     assert(maskCentroid(cube).count > 40);
 }

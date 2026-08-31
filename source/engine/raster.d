@@ -332,6 +332,20 @@ ubyte[] composeOverlay(const Mask tpl, const Mask user, OverlayMode mode, const 
     return outp;
 }
 
+ubyte[] composeHiddenSample(int w, int h)
+{
+    auto outp = new ubyte[](w * h * 4);
+    foreach (i; 0 .. w * h)
+    {
+        size_t o = i * 4;
+        outp[o] = 232;
+        outp[o + 1] = 230;
+        outp[o + 2] = 224;
+        outp[o + 3] = 255;
+    }
+    return outp;
+}
+
 ubyte[] composeSample(const Mask tpl, const Mask guides)
 {
     auto outp = new ubyte[](tpl.w * tpl.h * 4);
