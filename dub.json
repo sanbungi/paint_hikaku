@@ -1,0 +1,30 @@
+{
+	"name": "paint-hikaku",
+	"description": "Tablet drawing trainer: copy a template and overlay-compare the difference.",
+	"license": "MIT",
+	"targetType": "executable",
+	"targetName": "paint_hikaku",
+	"sourcePaths": ["source"],
+	"importPaths": ["source"],
+	"stringImportPaths": ["assets"],
+	"dependencies": {
+		"dlangui": "~>0.10.8"
+	},
+	"versions": [
+		"SDL_204"
+	],
+	"configurations": [
+		{
+			"name": "application",
+			"targetType": "executable",
+			"mainSourceFile": "source/app.d",
+			"excludedSourceFiles": ["source/ui/text.d"]
+		},
+		{
+			"name": "unittest",
+			"targetType": "executable",
+			"mainSourceFile": "source/ut_main.d",
+			"excludedSourceFiles": ["source/app.d", "source/ui/*"]
+		}
+	]
+}

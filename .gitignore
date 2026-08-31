@@ -1,0 +1,11 @@
+.dub/
+*.o
+*.obj
+*.exe
+paint_hikaku
+paint-hikaku
+__dummy.html
+docs.json
+/data/
+.DS_Store
+

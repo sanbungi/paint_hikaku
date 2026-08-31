@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-and-build:
+    name: Test + Linux binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: dmd-latest
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            libfreetype6-dev \
+            libfontconfig1-dev \
+            libgl1-mesa-dev
+
+      - name: Test
+        run: dub test --config=unittest
+
+      - name: Build release binary
+        run: dub build --config=application --build=release
+
+      - name: Check binary
+        run: |
+          test -x paint_hikaku
+          file paint_hikaku
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paint_hikaku-linux-x86_64
+          path: paint_hikaku
+          if-no-files-found: error

@@ -1,0 +1,169 @@
+module ui.canvas;
+
+import dlangui;
+import engine.types;
+import engine.stroke;
+import engine.raster;
+import engine.compare;
+import engine.board;
+import engine.viewgeom;
+import std.algorithm : max, min;
+import std.math : sqrt;
+
+public import engine.board : BoardState;
+
+enum ViewRole
+{
+    sample, /// 上：見本（練習中はお手本のみ。答え合わせ後は合成／スライド）
+    paper /// 下：真っ白なキャンバスに模写
+}
+
+class BoardView : CanvasWidget
+{
+    BoardState st;
+    ViewRole role;
+    ColorDrawBuf pix;
+
+    this(BoardState state, ViewRole role_, string id)
+    {
+        super(id);
+        st = state;
+        role = role_;
+        styleId = STYLE_EDIT_BOX;
+        clickable = (role == ViewRole.paper);
+        focusable = (role == ViewRole.paper);
+        layoutWidth(CanvasSize).layoutHeight(CanvasSize);
+        minWidth = 160;
+        minHeight = 160;
+        maxWidth = CanvasSize;
+        maxHeight = CanvasSize;
+        pix = new ColorDrawBuf(CanvasSize, CanvasSize);
+        onDrawListener = &paint;
+    }
+
+    override bool onMouseEvent(MouseEvent event)
+    {
+        if (role != ViewRole.paper || st.resultMode)
+            return super.onMouseEvent(event);
+
+        Rect sq = squareContent();
+        if (sq.empty)
+            return super.onMouseEvent(event);
+        float scale = cast(float) CanvasSize / sq.width;
+        float lx = (event.x - sq.left) * scale;
+        float ly = (event.y - sq.top) * scale;
+        bool inside = event.x >= sq.left && event.x < sq.right && event.y >= sq.top && event.y < sq.bottom;
+
+        if (event.action == MouseAction.ButtonDown && event.button == MouseButton.Left && inside)
+        {
+            setFocus();
+            st.drawing = true;
+            st.current = Stroke.init;
+            st.addPoint(lx, ly, 1.0f);
+            invalidatePair();
+            return true;
+        }
+        if (event.action == MouseAction.Move && st.drawing)
+        {
+            if (inside)
+            {
+                st.addPoint(lx, ly, 1.0f);
+                invalidatePair();
+            }
+            return true;
+        }
+        if (event.action == MouseAction.ButtonUp && event.button == MouseButton.Left && st.drawing)
+        {
+            if (st.current.points.length)
+                st.strokes ~= st.current;
+            st.current = Stroke.init;
+            st.drawing = false;
+            if (st.onChanged)
+                st.onChanged();
+            invalidatePair();
+            return true;
+        }
+        if (event.action == MouseAction.Cancel)
+        {
+            st.drawing = false;
+            return true;
+        }
+        return super.onMouseEvent(event);
+    }
+
+    void invalidatePair()
+    {
+        invalidate();
+        if (parent)
+            parent.invalidate();
+    }
+
+    private void paint(CanvasWidget canvas, DrawBuf buf, Rect rc)
+    {
+        auto showUser = st.userAligned();
+        ubyte[] rgba;
+        if (role == ViewRole.paper)
+            rgba = composePaper(showUser);
+        else if (st.resultMode)
+        {
+            if (st.overlay == OverlayMode.wipe)
+                rgba = composeWipe(st.tpl, showUser, st.guides, st.wipePct);
+            else
+            {
+                float[] heat;
+                if (st.overlay == OverlayMode.heat)
+                    heat = distanceTransform(st.tpl);
+                rgba = composeOverlay(st.tpl, showUser, st.overlay, heat);
+            }
+        }
+        else
+            rgba = composeSample(st.tpl, st.guides);
+
+        foreach (y; 0 .. CanvasSize)
+        {
+            uint* sl = pix.scanLine(y);
+            size_t row = y * CanvasSize * 4;
+            foreach (x; 0 .. CanvasSize)
+            {
+                size_t o = row + x * 4;
+                sl[x] = (cast(uint) rgba[o] << 16) | (cast(uint) rgba[o + 1] << 8) | rgba[o + 2];
+            }
+        }
+        pix.invalidate();
+        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, CanvasSize);
+        if (sv.empty)
+            return;
+        buf.fillRect(rc, 0xE8E6E0);
+        buf.drawRescaled(Rect(sv.x, sv.y, sv.x + sv.w, sv.y + sv.h), pix, Rect(0, 0, CanvasSize, CanvasSize));
+    }
+
+    Rect squareFrom(Rect rc)
+    {
+        auto sv = squareView(rc.left, rc.top, rc.width, rc.height, CanvasSize);
+        if (sv.empty)
+            return Rect.init;
+        return Rect(sv.x, sv.y, sv.x + sv.w, sv.y + sv.h);
+    }
+
+    Rect squareContent()
+    {
+        Rect rc = _pos;
+        applyMargins(rc);
+        applyPadding(rc);
+        return squareFrom(rc);
+    }
+
+    override void measure(int parentWidth, int parentHeight)
+    {
+        measuredContent(parentWidth, parentHeight, CanvasSize, CanvasSize);
+    }
+
+    override void layout(Rect rc)
+    {
+        Rect sq = squareFrom(rc);
+        if (sq.empty)
+            super.layout(rc);
+        else
+            super.layout(sq);
+    }
+}
