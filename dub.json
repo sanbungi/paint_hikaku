@@ -14,11 +14,19 @@
 	"versions": [
 		"SDL_204"
 	],
+	"subConfigurations": {"dlangui": "sdl"},
 	"configurations": [
 		{
 			"name": "application",
 			"targetType": "executable",
 			"mainSourceFile": "source/app.d",
+			"excludedSourceFiles": ["source/ui/text.d"]
+		},
+		{
+			"name": "gui-test",
+			"targetType": "executable",
+			"mainSourceFile": "source/app.d",
+			"versions": ["GuiRegression"],
 			"excludedSourceFiles": ["source/ui/text.d"]
 		},
 		{

@@ -193,7 +193,7 @@ bool faceFront(Cam c, Mesh m, Face f)
     // camera looks +Z from -camDist; front if normal toward camera (−Z in cam? )
     // point in cam: we added camDist on z at project. View from (0,0,-camDist) toward +Z.
     // Face toward camera if n · (camera - point) > 0. Camera in this space is (0,0,-camDist) before z-shift.
-    auto view = v3(-a.x, -a.y, -a.z - (c.ortho ? 10 : 0));
+    auto view = v3(-a.x, -a.y, -a.z - c.camDist);
     if (c.ortho)
         view = v3(0.5f, 0.5f, -1);
     return dot(n, view) > 0;

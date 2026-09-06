@@ -8,4 +8,7 @@ __dummy.html
 docs.json
 /data/
 .DS_Store
-
+/dist/
+/test-results/
+__pycache__/
+*.dll

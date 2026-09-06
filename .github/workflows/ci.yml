@@ -1,43 +1,185 @@
 name: CI
-
 on:
   push:
+    branches: ['**']
+    tags: ['v*']
+    paths:
+      - 'source/**'
+      - 'assets/**'
+      - 'dub*.json'
+      - 'scripts/**'
+      - 'packaging/**'
+      - 'tests/**'
+      - '.github/workflows/**'
   pull_request:
-
+    paths:
+      - 'source/**'
+      - 'assets/**'
+      - 'dub*.json'
+      - 'scripts/**'
+      - 'packaging/**'
+      - 'tests/**'
+      - '.github/workflows/**'
+permissions:
+  contents: read
 jobs:
-  test-and-build:
-    name: Test + Linux binary
-    runs-on: ubuntu-latest
+  regression:
+    name: Regression (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
       - uses: dlang-community/setup-dlang@v1
         with:
-          compiler: dmd-latest
-
-      - name: Install system libraries
+          compiler: dmd-2.112.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libsdl2-dev \
-            libsdl2-image-dev \
-            libfreetype6-dev \
-            libfontconfig1-dev \
-            libgl1-mesa-dev
-
-      - name: Test
-        run: dub test --config=unittest
-
-      - name: Build release binary
-        run: dub build --config=application --build=release
-
-      - name: Check binary
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev fonts-noto-cjk xvfb xauth
+      - name: Unit and scenario regressions
+        run: python scripts/run_checks.py --name unit --timeout 900 --expect "PASS STATE-SAVE" --expect "PASS STATE-SAVE-RETRY" --expect "PASS STATE-IMAGE-PERSPECTIVE" --expect "PASS STATE-PEEK" --expect "PASS CATALOG-PERSPECTIVE" --expect "PASS GUIDES-NONSCORING" --expect "PASS HISTORY-PATHS" --expect "PASS COMPARE-PIXELS" --expect "PASS STATE-PERSPECTIVE-GUIDES" -- dub test --config=unittest --arch=x86_64
+      - name: Test CI failure detection
+        run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: Build GUI regression executable
+        run: dub build --config=gui-test --arch=x86_64
+      - name: Linux GUI regressions
+        if: runner.os == 'Linux'
+        run: python scripts/run_checks.py --name gui --expect "PASS GUI-EVENTS" --expect "PASS GUI-IMAGES" --expect "PASS GUI-LAYOUT" --expect "PASS GUI-SMOKE" -- xvfb-run -a -s '-screen 0 1920x1080x24' ./paint_hikaku
+      - name: Stage Windows test runtime
+        if: runner.os == 'Windows'
+        run: python scripts/package.py windows --version gui --stage-only
+      - name: Windows GUI regressions
+        if: runner.os == 'Windows'
+        run: python scripts/run_checks.py --name gui --expect "PASS GUI-EVENTS" --expect "PASS GUI-IMAGES" --expect "PASS GUI-LAYOUT" --expect "PASS GUI-SMOKE" -- dist/paint_hikaku-gui-windows-x86_64/paint_hikaku.exe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression-${{ matrix.os }}
+          path: test-results/
+          if-no-files-found: error
+  appimage:
+    name: AppImage
+    runs-on: ubuntu-22.04
+    needs: regression
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: dmd-2.112.0
+      - name: Dependencies
         run: |
-          test -x paint_hikaku
-          file paint_hikaku
-
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev desktop-file-utils file xvfb xauth
+      - run: dub build --config=application --build=release --arch=x86_64
+      - name: Package
+        env:
+          BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
+        run: python3 scripts/package.py linux --version "$BUILD_VERSION"
+      - name: Verify packaged application
+        run: |
+          appimage=(dist/*.AppImage)
+          python3 scripts/run_checks.py --name packaged-linux --expect "PASS GUI-SMOKE" -- xvfb-run -a "${appimage[0]}" --appimage-extract-and-run --smoke-test
       - uses: actions/upload-artifact@v4
         with:
-          name: paint_hikaku-linux-x86_64
-          path: paint_hikaku
+          name: appimage
+          path: dist/*.AppImage
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: appimage-logs
+          path: test-results/
+  ubuntu-compatibility:
+    name: Ubuntu 24.04 compatibility
+    runs-on: ubuntu-24.04
+    needs: appimage
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: appimage
+          path: dist
+      - run: sudo apt-get update && sudo apt-get install -y xvfb xauth libgl1
+      - name: Test AppImage without development packages
+        run: |
+          appimage=(dist/*.AppImage)
+          chmod +x "${appimage[0]}"
+          python3 scripts/run_checks.py --name ubuntu24 --expect "PASS GUI-SMOKE" -- xvfb-run -a "${appimage[0]}" --appimage-extract-and-run --smoke-test
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ubuntu24-logs
+          path: test-results/
+  windows-package:
+    name: Windows ZIP
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-2022
+    needs: regression
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: dmd-2.112.0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: dub build --config=application --build=release --arch=x86_64
+      - name: Package
+        env:
+          BUILD_VERSION: ${{ github.ref_name }}
+        run: python scripts/package.py windows --version $env:BUILD_VERSION
+      - name: Verify extracted ZIP
+        shell: pwsh
+        run: |
+          $archive = Get-ChildItem dist/*.zip | Select-Object -First 1
+          Expand-Archive $archive.FullName -DestinationPath "$env:RUNNER_TEMP/portable app"
+          $binary = Get-ChildItem "$env:RUNNER_TEMP/portable app" -Recurse -Filter paint_hikaku.exe | Select-Object -First 1
+          python scripts/run_checks.py --name packaged-windows --expect 'PASS GUI-SMOKE' -- $binary.FullName --smoke-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: dist/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-package-logs
+          path: test-results/
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [ubuntu-compatibility, windows-package]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: appimage
+          path: release
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+          path: release
+      - name: Publish verified binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        working-directory: release
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH'; exit 1; }
+          sha256sum -- *.AppImage *.zip > SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes *.AppImage *.zip SHA256SUMS
+          gh release edit "$RELEASE_TAG" --draft=false

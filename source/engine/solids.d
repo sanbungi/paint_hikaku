@@ -13,6 +13,21 @@ private void edge(ref Mesh m, int a, int b)
 
 private void face(ref Mesh m, int[] idx)
 {
+    // All built-in solids are convex: orient each normal away from the center.
+    auto center = v3(0, 0, 0);
+    foreach (v; m.v)
+    {
+        center.x += v.x / m.v.length;
+        center.y += v.y / m.v.length;
+        center.z += v.z / m.v.length;
+    }
+    auto normal = cross(sub(m.v[idx[1]], m.v[idx[0]]), sub(m.v[idx[2]], m.v[idx[0]]));
+    if (dot(normal, sub(m.v[idx[0]], center)) < 0)
+    {
+        import std.algorithm : reverse;
+        idx = idx.dup;
+        reverse(idx);
+    }
     m.faces ~= Face(idx);
     foreach (k; 0 .. idx.length)
         edge(m, idx[k], idx[(k + 1) % idx.length]);

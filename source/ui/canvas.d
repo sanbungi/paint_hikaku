@@ -17,6 +17,8 @@ float pollTouchPressure()
     try
     {
         import bindbc.sdl;
+        if (loadedSDLVersion() < SDLSupport.v2_0_4)
+            return p;
         int nd = SDL_GetNumTouchDevices();
         foreach (i; 0 .. nd)
         {
@@ -83,6 +85,8 @@ class BoardView : CanvasWidget
         onDrawListener = &paint;
     }
 
+    ~this() { destroy(pix); }
+
     override bool onMouseEvent(MouseEvent event)
     {
         if (role != ViewRole.paper || st.resultMode)
@@ -127,7 +131,11 @@ class BoardView : CanvasWidget
         }
         if (event.action == MouseAction.Cancel)
         {
+            if (st.current.points.length)
+                st.strokes ~= st.current;
+            st.current = Stroke.init;
             st.drawing = false;
+            if (st.onChanged) st.onChanged();
             return true;
         }
         return super.onMouseEvent(event);

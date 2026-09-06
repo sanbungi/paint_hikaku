@@ -12,6 +12,9 @@ import std.conv : to;
 
 string dataRoot()
 {
+    import std.process : environment;
+    auto overrideRoot = environment.get("PAINT_HIKAKU_DATA_DIR", "");
+    if (overrideRoot.length) return overrideRoot;
     version (Windows)
     {
         import std.process : environment;
@@ -42,7 +45,7 @@ string nowIso()
             t.year, cast(int) t.month, t.day, t.hour, t.minute, t.second);
 }
 
-void saveSession(SessionRecord rec)
+void saveSession(SessionRecord rec, string root = null)
 {
     JSONValue j = [
         "isoTime": JSONValue(rec.isoTime),
@@ -63,14 +66,23 @@ void saveSession(SessionRecord rec)
             "jitter": JSONValue(rec.metrics.jitter),
         ])
     ];
-    auto name = rec.isoTime ~ "_" ~ rec.templateId ~ ".json";
-    write(buildPath(sessionDir(), name), j.toPrettyString);
+    import std.digest.sha : sha256Of;
+    import std.digest : toHexString;
+    import std.uuid : randomUUID;
+    import std.ascii : isAlphaNum;
+    string stamp;
+    foreach (c; rec.isoTime) if (isAlphaNum(c) || c == '-') stamp ~= c;
+    auto name = stamp ~ "_" ~ toHexString(sha256Of(rec.templateId)) ~ "_" ~ randomUUID().toString ~ ".json";
+    auto directory = root.length ? root : sessionDir();
+    mkdirRecurse(directory);
+    write(buildPath(directory, name), j.toPrettyString);
 }
 
-SessionRecord[] loadRecent(int limit = 24)
+SessionRecord[] loadRecent(int limit = 24, string root = null)
 {
     SessionRecord[] recs;
-    auto dir = sessionDir();
+    auto dir = root.length ? root : sessionDir();
+    if (!exists(dir)) return recs;
     string[] files;
     foreach (e; dirEntries(dir, "*.json", SpanMode.shallow))
         files ~= e.name;

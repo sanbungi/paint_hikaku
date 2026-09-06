@@ -6,14 +6,17 @@ import dlangui.dialogs.dialog;
 import dlangui.graphics.images;
 import dlangui.widgets.groupbox;
 import dlangui.widgets.scrollbar;
+import dlangui.widgets.scroll;
 import ui.canvas;
 import ui.fonts;
+import ui.sidebar;
 import engine.types;
 import engine.templates;
 import engine.perspective;
 import engine.solids;
 import engine.diagnose;
 import engine.raster;
+import engine.session;
 import store.history;
 import std.conv : to;
 import std.format : format;
@@ -25,22 +28,213 @@ mixin APP_ENTRY_POINT;
 
 extern (C) int UIAppMain(string[] args)
 {
-    installUiFonts();
-    auto win = Platform.instance.createWindow("paint_hikaku", null, WindowFlag.Resizable, 1600, 900);
+    bool fontsReady = installUiFonts();
+    import bindbc.sdl : SDL_GetDisplayBounds, SDL_Rect;
+    int width = 1280, height = 800;
+    SDL_Rect desktop;
+    if (SDL_GetDisplayBounds(0, &desktop) == 0)
+    {
+        width = min(width, desktop.w * 9 / 10);
+        height = min(height, desktop.h * 9 / 10);
+    }
+    import std.algorithm : canFind;
+    bool smoke = args.canFind("--smoke-test");
+    version (GuiRegression) smoke = true;
+    if (smoke)
+    {
+        import std.process : environment;
+        import std.exception : enforce;
+        enforce(environment.get("PAINT_HIKAKU_DATA_DIR", "").length > 0,
+                "Smoke tests require an isolated PAINT_HIKAKU_DATA_DIR");
+        enforce(fontsReady, "Japanese UI font registration failed");
+    }
+    auto win = Platform.instance.createWindow("paint_hikaku", null, WindowFlag.Resizable, width, height);
     auto studio = new Studio();
     win.mainWidget = studio;
-    win.windowStateChanged = delegate(Window w, WindowState st, Rect rc) {
-        studio.onWindowState(st, rc);
-        return true;
-    };
     win.show();
-    if (args.length > 1)
+    if (smoke)
+    {
+        studio.loadEmbeddedSample();
+        studio.smokeRequested = true;
+    }
+    else if (args.length > 1)
         studio.openImagePath(args[1]);
     return Platform.instance.enterMessageLoop();
 }
 
+version (GuiRegression) void runGuiRegression(Studio s)
+{
+    import std.exception : enforce;
+    import std.stdio : writeln;
+    import std.file : mkdirRecurse;
+    import std.process : environment;
+    import std.path : buildPath;
+    import arsd.png : writePng, PngType;
+    auto output = environment.get("PAINT_HIKAKU_TEST_OUTPUT", "test-results");
+    mkdirRecurse(output);
+    void screenshot(string name)
+    {
+        auto buf = new ColorDrawBuf(s.pos.width, s.pos.height);
+        scope(exit) destroy(buf);
+        buf.fill(0x00ffffff);
+        s.onDraw(buf);
+        ubyte[] rgb = new ubyte[buf.width * buf.height * 3];
+        foreach (y; 0 .. buf.height) foreach (x; 0 .. buf.width)
+        {
+            auto p = buf.scanLine(y)[x];
+            auto offset = (y * buf.width + x) * 3;
+            rgb[offset] = cast(ubyte)(p >> 16);
+            rgb[offset + 1] = cast(ubyte)(p >> 8);
+            rgb[offset + 2] = cast(ubyte)p;
+        }
+        writePng(buildPath(output, name ~ ".png"), rgb, buf.width, buf.height, PngType.truecolor);
+    }
+    scope(failure) screenshot("failure");
+    writeln("RUN GUI-EVENTS");
+    s.tplCombo.itemClick(s.tplCombo, 1);
+    enforce(s.templateId == "circle" && s.tplList.selectedItemIndex == 1, "Template selectors disagree");
+    auto paper = s.paperView;
+    auto rc = paper.pos;
+    auto x = cast(short)(rc.left + rc.width / 2);
+    auto y = cast(short)(rc.top + min(rc.width, rc.height) / 2);
+    enforce(paper.onMouseEvent(new MouseEvent(MouseAction.ButtonDown, MouseButton.Left, 0, x, y)), "Draw down ignored");
+    paper.onMouseEvent(new MouseEvent(MouseAction.Move, MouseButton.Left, 0, cast(short)(x + 10), y));
+    paper.onMouseEvent(new MouseEvent(MouseAction.ButtonUp, MouseButton.Left, 0, x, y));
+    enforce(s.board.strokes.length == 1, "Stroke not committed");
+    s.btnCheck.click(s.btnCheck);
+    enforce(s.board.resultMode, "Check button disconnected");
+    s.btnSave.click(s.btnSave);
+    enforce(s.savedThisResult && s.recs.length == 1, "Save button disconnected");
+    s.btnSave.click(s.btnSave);
+    enforce(s.recs.length == 1, "Duplicate save");
+    s.alignBox.checkChange(s.alignBox, true);
+    enforce(!s.savedThisResult && s.board.alignMode == AlignMode.centroid, "Alignment did not invalidate save");
+    s.btnSave.click(s.btnSave);
+    enforce(s.recs.length == 2, "Changed result not saved");
+    foreach (i; 0 .. 4) s.overlayCombo.itemClick(s.overlayCombo, i);
+    s.btnAgain.click(s.btnAgain);
+    enforce(!s.board.resultMode && s.board.strokes.length == 0, "Again failed");
+    foreach (endAction; [MouseAction.ButtonUp, MouseAction.Cancel])
+    {
+        paper.onMouseEvent(new MouseEvent(MouseAction.ButtonDown, MouseButton.Left, 0, x, y));
+        paper.onMouseEvent(new MouseEvent(endAction, MouseButton.Left, 0, -1, -1));
+        enforce(!s.board.drawing && s.board.current.points.length == 0, "Unfinished stroke after outside release/cancel");
+    }
+    enforce(s.board.strokes.length == 2, "Outside release lost strokes");
+    s.btnUndo.click(s.btnUndo);
+    enforce(s.board.strokes.length == 1, "Undo did not remove exactly one stroke");
+    s.btnClear.click(s.btnClear);
+    enforce(s.board.strokes.length == 0, "Clear did not remove strokes");
+    enforce(pressureFromEvent(new MouseEvent(MouseAction.Move, MouseButton.Left, MouseFlag.Shift, x, y), true) == 0.4f,
+            "Shift pressure fallback changed");
+    writeln("PASS GUI-EVENTS");
+    writeln("RUN GUI-IMAGES");
+    {
+        import arsd.color : TrueColorImage, Color;
+        import arsd.jpeg : writeJpeg;
+        import std.file : write;
+        auto fixture = new TrueColorImage(80, 40);
+        foreach (iy; 0 .. 40) foreach (ix; 0 .. 80)
+            fixture.setPixel(ix, iy, ix < 40 ? Color(220, 40, 40) : Color(20, 20, 20));
+        foreach (extension; ["png", "jpg"])
+        {
+            auto path = buildPath(output, "日本語 image." ~ extension);
+            if (extension == "png") writePng(path, fixture);
+            else writeJpeg(path, fixture);
+            s.openImagePath(path);
+            enforce(s.templateId == "image:" ~ path, "Image load failed: " ~ extension);
+            auto color = s.board.tplColor;
+            auto center = (CanvasSize / 2 * CanvasSize + CanvasSize / 3) * 4;
+            enforce(color[center] > color[center + 1] + 80, "Image lost its color");
+            enforce(color[0 .. 4] == [250, 249, 245, 255], "Aspect ratio padding was lost");
+            auto oldMask = s.board.tpl.px.dup;
+            s.perspMode.itemClick(s.perspMode, 0);
+            enforce(s.board.tpl.px == oldMask && s.board.tplColor == color, "Perspective changed image");
+        }
+        auto oldId = s.templateId;
+        s.openImagePath(buildPath(output, "missing.png"));
+        enforce(s.templateId == oldId, "Missing image changed current template");
+        auto invalid = buildPath(output, "corrupt.png");
+        write(invalid, "invalid image");
+        s.openImagePath(invalid);
+        enforce(s.templateId == oldId, "Corrupt image changed current template");
+    }
+    writeln("PASS GUI-IMAGES");
+    foreach (slider; [s.slYaw, s.slPitch, s.slDist, s.slHorizon])
+    {
+        auto minus = s.childById!Button(slider.id ~ "-minus");
+        auto plus = s.childById!Button(slider.id ~ "-plus");
+        int initial = slider.position;
+        plus.click(plus);
+        enforce(slider.position == initial + 1, "Slider increment failed");
+        minus.click(minus);
+        enforce(slider.position == initial, "Slider decrement failed");
+        slider.position = slider.minValue;
+        minus.click(minus);
+        enforce(slider.position == slider.minValue, "Slider below minimum");
+        slider.position = slider.maxValue - slider.pageSize;
+        plus.click(plus);
+        enforce(slider.position == slider.maxValue - slider.pageSize, "Slider above maximum");
+        slider.position = initial;
+        slider.sendScrollEvent(ScrollAction.SliderReleased, initial);
+    }
+    writeln("RUN GUI-LAYOUT");
+    auto originalDpi = overrideScreenDPI;
+    scope(exit) overrideScreenDPI = originalDpi;
+    foreach (dpi; [96, 120, 144, 192])
+    foreach (size; [dlangui.core.types.Point(1366, 768), dlangui.core.types.Point(1920, 1080)])
+    foreach (side; [false, true])
+    {
+        overrideScreenDPI = dpi;
+        s.onThemeChanged();
+        s.leftExplicit = s.rightExplicit = false;
+        s.layCombo.itemClick(s.layCombo, side ? 1 : 0);
+        s.measure(size.x, size.y);
+        s.layout(Rect(0, 0, size.x, size.y));
+        auto a = s.sampleView.pos, b = s.paperView.pos;
+        enforce(a.width > 0 && a.height > 0 && b.width > 0 && b.height > 0, "Empty canvas");
+        enforce(side ? a.right <= b.left : a.bottom <= b.top, "Overlapping canvases");
+        foreach (button; [s.btnCheck, s.btnAgain, s.btnUndo, s.btnClear, s.btnSave])
+        {
+            auto position = button.pos;
+            enforce(position.width > 0 && position.height > 0 && position.right <= size.x
+                    && position.bottom <= size.y, "Action button outside window");
+        }
+        if (dpi == 192 && size.x == 1366)
+        {
+            auto settings = s.childById!Button("settings");
+            auto diagnosis = s.childById!Button("diagnosis");
+            settings.click(settings);
+            enforce(s.leftScroll.visibility == Visibility.Visible, "Settings cannot be opened");
+            diagnosis.click(diagnosis);
+            enforce(s.rightScroll.visibility == Visibility.Visible && s.leftScroll.visibility == Visibility.Gone,
+                    "Compact panels overlap drawing area");
+            s.measure(size.x, size.y);
+            s.layout(Rect(0, 0, size.x, size.y));
+        }
+        screenshot(format("layout-%d-%d-%s", dpi, size.x, side ? "side" : "stack"));
+        if (s.leftScroll.visibility == Visibility.Visible)
+        {
+            enforce(s.leftScroll.fullContentSize.x <= s.leftScroll.pos.width,
+                    "Sidebar content overflows horizontally");
+            enforce(!(cast(SidebarScroll)s.leftScroll).horizontalOverflow,
+                    "Sidebar has an unnecessary horizontal scrollbar");
+            enforce(s.slYaw.pos.width > pointsToPixels(60), "Slider track too narrow");
+            enforce(s.slYaw.pos.right <= s.leftScroll.pos.right, "Slider outside sidebar");
+            auto help = s.childById!TextWidget("guideHelp");
+            enforce(help.pos.height > s.labYaw.pos.height, "Sidebar help did not wrap");
+        }
+    }
+    writeln("PASS GUI-LAYOUT");
+}
+
 final class Studio : VerticalLayout
 {
+    PracticeSession session;
+    @property string templateId() { return session.templateId; }
+    @property bool savedThisResult() { return session.saved; }
+    @property void savedThisResult(bool value) { session.saved = value; }
+    @property ref PerspSettings persp() { return session.perspective; }
     BoardState board;
     BoardView sampleView;
     BoardView paperView;
@@ -49,12 +243,17 @@ final class Studio : VerticalLayout
     TextWidget labSample;
     TextWidget labPaper;
     ComboBox layCombo;
+    ComboBox tplCombo;
+    bool syncingTemplate;
+    ScrollWidget leftScroll, rightScroll;
+    bool leftExplicit, rightExplicit;
+    bool compactLayout;
     EditBox trendText;
     ulong peekTimerId;
-    ulong aspectTimerId;
-    bool snappingAspect;
-    int lastWinW = 1600;
-    int lastWinH = 900;
+    ulong peekGeneration;
+    ulong smokeTimerId;
+    bool smokeDrawn;
+    bool smokeRequested;
     SliderWidget slWipe;
     TextWidget labWipe;
     StringListWidget tplList;
@@ -65,10 +264,7 @@ final class Studio : VerticalLayout
     TextWidget status;
     Button btnCheck, btnAgain, btnSave, btnUndo, btnClear;
     TemplateDef[] catalog;
-    string templateId = "circle";
-    bool savedThisResult;
     SessionRecord[] recs;
-    PerspSettings persp;
     ComboBox perspMode;
     SliderWidget slYaw, slPitch, slDist, slHorizon;
     TextWidget labYaw, labPitch, labDist, labHorizon;
@@ -77,6 +273,8 @@ final class Studio : VerticalLayout
     this()
     {
         super("studio");
+        session = new PracticeSession();
+        board = session.board;
         layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
         padding(Rect(4, 4, 4, 4));
         fontFace = "AppUI";
@@ -96,6 +294,7 @@ final class Studio : VerticalLayout
             return true;
         };
         auto gridCombo = new ComboBox("grid", ["グリッドなし"d, "2分割"d, "3×3"d, "4×4"d]);
+        gridCombo.selectedItemIndex = 0;
         gridCombo.itemClick = delegate(Widget w, int i) {
             int[] ns = [0, 2, 3, 4];
             board.gridN = ns[i];
@@ -110,15 +309,15 @@ final class Studio : VerticalLayout
         };
         auto chkMem = new CheckBox("mem", "記憶模写"d);
         chkMem.checkChange = delegate(Widget w, bool c) {
-            board.memoryMode = c;
-            board.peeking = false;
+            session.memory(c);
             refreshBoards();
             updateDiagLive();
             return true;
         };
         auto btnPeek = new Button("peek", "チラ見"d);
         btnPeek.click = delegate(Widget w) {
-            board.peeking = true;
+            if (peekTimerId) cancelTimer(peekTimerId);
+            peekGeneration = session.peek();
             refreshBoards();
             peekTimerId = setTimer(1800);
             return true;
@@ -133,23 +332,32 @@ final class Studio : VerticalLayout
         bar.addChild(layCombo);
         bar.addChild(gridCombo);
         bar.addChild(chkBox);
-        bar.addChild(chkMem);
-        bar.addChild(btnPeek);
-        bar.addChild(chkPr);
-        bar.addChild(new HSpacer());
-        bar.addChild(btnOpen);
-        bar.addChild(btnSample);
-        addChild(bar);
+        auto barScroll = new ScrollWidget("toolbar", ScrollBarMode.Auto, ScrollBarMode.Invisible);
+        barScroll.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(36));
+        barScroll.contentWidget = bar;
+        addChild(barScroll);
+        auto extraBar = new HorizontalLayout();
+        extraBar.layoutWidth(FILL_PARENT);
+        extraBar.addChild(chkMem);
+        extraBar.addChild(btnPeek);
+        extraBar.addChild(chkPr);
+        extraBar.addChild(new HSpacer());
+        extraBar.addChild(btnOpen);
+        extraBar.addChild(btnSample);
+        auto extraScroll = new ScrollWidget("tools", ScrollBarMode.Auto, ScrollBarMode.Invisible);
+        extraScroll.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(36));
+        extraScroll.contentWidget = extraBar;
+        addChild(extraScroll);
 
         btnUndo = new Button("undo", "アンドゥ"d);
         btnClear = new Button("clear", "クリア"d);
         btnCheck = new Button("check", "答え合わせ"d);
         btnAgain = new Button("again", "もう一度"d);
         btnSave = new Button("save", "記録"d);
-        btnUndo.click = delegate(Widget w) { board.undo(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
-        btnClear.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
+        btnUndo.click = delegate(Widget w) { session.undo(); refreshBoards(); updateDiagLive(); return true; };
+        btnClear.click = delegate(Widget w) { session.clear(); refreshBoards(); updateDiagLive(); return true; };
         btnCheck.click = delegate(Widget w) { doCheck(); return true; };
-        btnAgain.click = delegate(Widget w) { board.clearInk(); savedThisResult = false; refreshBoards(); updateDiagLive(); return true; };
+        btnAgain.click = delegate(Widget w) { session.clear(); refreshBoards(); updateDiagLive(); return true; };
         btnSave.click = delegate(Widget w) { persist(); return true; };
         foreach (b; [btnUndo, btnClear, btnCheck, btnAgain, btnSave])
             b.layoutWidth(FILL_PARENT);
@@ -158,16 +366,14 @@ final class Studio : VerticalLayout
         body.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
 
         auto left = new VerticalLayout();
-        left.minWidth = 220;
-        left.maxWidth = 250;
-        left.layoutWidth(250);
-        left.layoutHeight(FILL_PARENT);
-        left.addChild(new TextWidget(null, "お手本"d).fontSize(18));
+        left.layoutWidth(FILL_PARENT).layoutHeight(WRAP_CONTENT);
+        left.addChild(new TextWidget(null, "お手本"d).fontSize(makePointSize(18)));
         dstring[] names;
         foreach (t; catalog)
             names ~= to!dstring(t.labelJa);
         names ~= "サンプル画像"d;
-        auto tplCombo = new ComboBox("tplCombo", names);
+        names ~= "外部画像"d;
+        tplCombo = new ComboBox("tplCombo", names);
         tplCombo.layoutWidth(FILL_PARENT);
         tplCombo.itemClick = delegate(Widget src, int index) {
             applyTemplateIndex(index);
@@ -175,7 +381,7 @@ final class Studio : VerticalLayout
         };
         left.addChild(tplCombo);
         tplList = new StringListWidget("tpls", names);
-        tplList.layoutWidth(FILL_PARENT).layoutHeight(200);
+        tplList.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(200));
         tplList.itemSelected = delegate(Widget src, int index) {
             applyTemplateIndex(index);
             return true;
@@ -206,7 +412,7 @@ final class Studio : VerticalLayout
             return true;
         };
         pg.addChild(labYaw);
-        pg.addChild(slYaw);
+        pg.addChild(sliderRow(slYaw));
         labPitch = new TextWidget(null, "上下角 16°"d);
         slPitch = makeSlider("pitch", -30, 35, 16);
         slPitch.scrollEvent = delegate(AbstractSlider s, ScrollEvent e) {
@@ -216,7 +422,7 @@ final class Studio : VerticalLayout
             return true;
         };
         pg.addChild(labPitch);
-        pg.addChild(slPitch);
+        pg.addChild(sliderRow(slPitch));
         labDist = new TextWidget(null, "距離 55"d);
         slDist = makeSlider("dist", 1, 90, 55);
         slDist.scrollEvent = delegate(AbstractSlider s, ScrollEvent e) {
@@ -226,7 +432,7 @@ final class Studio : VerticalLayout
             return true;
         };
         pg.addChild(labDist);
-        pg.addChild(slDist);
+        pg.addChild(sliderRow(slDist));
         labHorizon = new TextWidget(null, "地平線 42%"d);
         slHorizon = makeSlider("hor", 20, 80, 42);
         slHorizon.scrollEvent = delegate(AbstractSlider s, ScrollEvent e) {
@@ -236,8 +442,8 @@ final class Studio : VerticalLayout
             return true;
         };
         pg.addChild(labHorizon);
-        pg.addChild(slHorizon);
-        chkGuides = new CheckBox("g", "補助線（地平線・消失点）"d);
+        pg.addChild(sliderRow(slHorizon));
+        chkGuides = new CheckBox("g", "補助線"d);
         chkGuides.checked = true;
         chkGuides.checkChange = delegate(Widget w, bool c) {
             persp.showGuides = c;
@@ -253,24 +459,31 @@ final class Studio : VerticalLayout
         };
         pg.addChild(chkGuides);
         pg.addChild(chkHidden);
-        pg.addChild(new TextWidget(null, "青い線がお手本。灰色はガイドで採点に入りません。"d).fontSize(12));
+        auto guideHelp = new MultilineTextWidget("guideHelp",
+                "青い線がお手本。灰色の補助線（地平線・消失点）と隠れ線は採点対象外です。"d);
+        guideHelp.maxLines = 20;
+        guideHelp.layoutWidth(FILL_PARENT).fontSize(makePointSize(11));
+        pg.addChild(guideHelp);
         left.addChild(pg);
 
         left.addChild(new VSpacer());
-        left.addChild(new TextWidget(null, "履歴（最近）"d).fontSize(16));
+        left.addChild(new TextWidget(null, "履歴（最近）"d).fontSize(makePointSize(16)));
         histList = new StringListWidget("hist");
-        histList.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
+        histList.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(120));
         left.addChild(histList);
-        left.addChild(new TextWidget(null, "この題材の傾向"d).fontSize(14));
+        left.addChild(new TextWidget(null, "この題材の傾向"d).fontSize(makePointSize(14)));
         trendText = new EditBox("trend");
         trendText.readOnly = true;
-        trendText.fontSize(13);
-        trendText.layoutWidth(FILL_PARENT).layoutHeight(90);
+        trendText.wordWrap = true;
+        trendText.fontSize(makePointSize(13));
+        trendText.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(90));
         trendText.text = "記録すると、同じ題材のクセがここに溜まります。"d;
         left.addChild(trendText);
-        body.addChild(left);
+        leftScroll = new SidebarScroll("leftScroll");
+        leftScroll.layoutWidth(makePointSize(195)).layoutHeight(FILL_PARENT);
+        leftScroll.contentWidget = left;
+        body.addChild(leftScroll);
 
-        board = new BoardState();
         board.onChanged = &updateDiagLive;
         sampleView = new BoardView(board, ViewRole.sample, "sample");
         paperView = new BoardView(board, ViewRole.paper, "paper");
@@ -309,10 +522,8 @@ final class Studio : VerticalLayout
         body.addChild(canvasFrame);
 
         auto right = new VerticalLayout();
-        right.minWidth = 280;
-        right.maxWidth = 320;
-        right.layoutWidth(300).layoutHeight(FILL_PARENT);
-        right.addChild(new TextWidget(null, "答え合わせ"d).fontSize(18));
+        right.layoutWidth(FILL_PARENT).layoutHeight(WRAP_CONTENT);
+        right.addChild(new TextWidget(null, "答え合わせ"d).fontSize(makePointSize(18)));
         overlayCombo = new ComboBox("ovl", [
             "重ね（青=お手本 / 赤=自分 / 緑=一致）"d,
             "差分"d,
@@ -347,7 +558,7 @@ final class Studio : VerticalLayout
         right.addChild(slWipe);
         alignBox = new CheckBox("align", "重心で位置合わせ（形だけ見る）"d);
         alignBox.checkChange = delegate(Widget w, bool checked) {
-            board.alignMode = checked ? AlignMode.centroid : AlignMode.none;
+            session.setAlignment(checked ? AlignMode.centroid : AlignMode.none);
             if (board.resultMode)
                 refreshDiagnosis();
             refreshBoards();
@@ -356,25 +567,55 @@ final class Studio : VerticalLayout
         right.addChild(alignBox);
         diagText = new EditBox("diag");
         diagText.text = "上の見本を見て、下の白い紙に模写します。「答え合わせ」で見本に合成されます。"d;
-        diagText.layoutWidth(FILL_PARENT).layoutHeight(FILL_PARENT);
+        diagText.layoutWidth(FILL_PARENT).layoutHeight(makePointSize(220));
         diagText.readOnly = true;
-        diagText.fontSize(16);
+        diagText.fontSize(makePointSize(16));
         right.addChild(diagText);
-        body.addChild(right);
+        rightScroll = new ScrollWidget("rightScroll");
+        rightScroll.layoutWidth(makePointSize(210)).layoutHeight(FILL_PARENT);
+        rightScroll.contentWidget = right;
+        body.addChild(rightScroll);
+        auto settingsButton = new Button("settings", "題材・設定"d);
+        settingsButton.click = delegate(Widget w) {
+            leftExplicit = true;
+            leftScroll.visibility = leftScroll.visibility == Visibility.Gone ? Visibility.Visible : Visibility.Gone;
+            if (compactLayout && leftScroll.visibility == Visibility.Visible)
+            {
+                rightExplicit = true;
+                rightScroll.visibility = Visibility.Gone;
+            }
+            requestLayout(); return true;
+        };
+        bar.addChild(settingsButton);
+        auto diagnosisButton = new Button("diagnosis", "診断"d);
+        diagnosisButton.click = delegate(Widget w) {
+            rightExplicit = true;
+            rightScroll.visibility = rightScroll.visibility == Visibility.Gone ? Visibility.Visible : Visibility.Gone;
+            if (compactLayout && rightScroll.visibility == Visibility.Visible)
+            {
+                leftExplicit = true;
+                leftScroll.visibility = Visibility.Gone;
+            }
+            requestLayout(); return true;
+        };
+        bar.addChild(diagnosisButton);
 
         addChild(body);
         status = new TextWidget("status", "位置合わせなし。点数は参考です。クセを直す練習です。"d);
         addChild(status);
         reloadHistory();
-        selectShape("circle");
-        tplList.selectedItemIndex = 1; // 円
+        applyTemplateIndex(1); // 円
         setSideBySide(true);
     }
 
     void applyTemplateIndex(int index)
     {
-        if (index < 0)
+        if (index < 0 || index > catalog.length || syncingTemplate)
             return;
+        syncingTemplate = true;
+        scope(exit) syncingTemplate = false;
+        tplCombo.selectedItemIndex = index;
+        tplList.selectedItemIndex = index;
         if (index < catalog.length)
             selectShape(catalog[index].id);
         else
@@ -383,9 +624,8 @@ final class Studio : VerticalLayout
 
     void selectShape(string id)
     {
-        templateId = id;
-        savedThisResult = false;
-        applyPersp(true);
+        session.select(id);
+        refreshBoards();
         refreshTrend();
         updateDiagLive();
     }
@@ -394,8 +634,9 @@ final class Studio : VerticalLayout
     {
         if (board is null)
             return;
-        auto r = renderTemplate(templateId, persp);
-        board.setTemplate(r.ink, r.guides, clearUser);
+        if (clearUser) session.select(templateId);
+        else session.adjustPerspective(persp);
+        updateDiagLive();
         refreshBoards();
         if (isSolidId(templateId))
         {
@@ -419,9 +660,31 @@ final class Studio : VerticalLayout
         s.maxValue = hi + 8;
         s.position = pos;
         s.layoutWidth(FILL_PARENT);
-        s.minHeight = 22;
-        s.maxHeight = 28;
+        s.minHeight = makePointSize(22);
+        s.maxHeight = makePointSize(28);
         return s;
+    }
+
+    Widget sliderRow(SliderWidget slider)
+    {
+        auto row = new HorizontalLayout();
+        row.layoutWidth(FILL_PARENT);
+        slider.layoutWeight = 1;
+        Button stepButton(string suffix, dstring label, int delta)
+        {
+            auto button = new Button(slider.id ~ suffix, label);
+            button.layoutWidth(makePointSize(28)).minHeight(makePointSize(28));
+            button.click = delegate(Widget w) {
+                slider.position = max(slider.minValue, min(slider.maxValue - slider.pageSize, slider.position + delta));
+                slider.sendScrollEvent(ScrollAction.SliderReleased, slider.position);
+                return true;
+            };
+            return button;
+        }
+        row.addChild(stepButton("-minus", "−"d, -1));
+        row.addChild(slider);
+        row.addChild(stepButton("-plus", "+"d, 1));
+        return row;
     }
 
     void updateDiagLive()
@@ -445,10 +708,9 @@ final class Studio : VerticalLayout
 
     void doCheck()
     {
-        board.enterResult();
+        session.check();
         refreshDiagnosis();
         refreshBoards();
-        savedThisResult = false;
     }
 
     void refreshDiagnosis()
@@ -477,15 +739,12 @@ final class Studio : VerticalLayout
             status.text = "この結果は記録済みです。"d;
             return;
         }
-        auto d = diagnose(board.tpl, board.user, board.strokes, board.alignMode);
-        SessionRecord rec;
-        rec.isoTime = nowIso();
-        rec.templateId = templateId;
-        rec.alignMode = board.alignMode == AlignMode.none ? "none" : "centroid";
-        rec.metrics = d.metrics;
-        rec.commentsJa = d.commentsJa;
-        saveSession(rec);
-        savedThisResult = true;
+        try { session.save(); }
+        catch (Exception e)
+        {
+            status.text = to!dstring("記録できませんでした: " ~ e.msg);
+            return;
+        }
         reloadHistory();
         status.text = "記録しました。"d;
     }
@@ -519,9 +778,9 @@ final class Studio : VerticalLayout
         {
             labSample.text = "見本"d;
             labPaper.text = "キャンバス"d;
-            actionStrip.minWidth = 108;
-            actionStrip.maxWidth = 128;
-            actionStrip.layoutWidth = 118;
+            actionStrip.minWidth = makePointSize(108);
+            actionStrip.maxWidth = makePointSize(128);
+            actionStrip.layoutWidth = makePointSize(118);
             actionStrip.layoutHeight = FILL_PARENT;
             actionStrip.minHeight = 0;
             actionStrip.maxHeight = 10000;
@@ -535,9 +794,9 @@ final class Studio : VerticalLayout
             actionStrip.minWidth = 0;
             actionStrip.maxWidth = 10000;
             actionStrip.layoutWidth = FILL_PARENT;
-            actionStrip.minHeight = 36;
-            actionStrip.maxHeight = 44;
-            actionStrip.layoutHeight = 40;
+            actionStrip.minHeight = makePointSize(36);
+            actionStrip.maxHeight = makePointSize(44);
+            actionStrip.layoutHeight = makePointSize(40);
             foreach (b; [btnUndo, btnClear, btnCheck, btnAgain, btnSave])
                 b.layoutWidth(WRAP_CONTENT);
         }
@@ -545,76 +804,59 @@ final class Studio : VerticalLayout
         refreshBoards();
     }
 
-    void onWindowState(WindowState st, Rect)
+    override void measure(int width, int height)
     {
-        if (st == WindowState.maximized || st == WindowState.fullscreen
-                || st == WindowState.minimized || st == WindowState.hidden)
-            return;
-        if (snappingAspect)
-            return;
-        if (aspectTimerId)
-            cancelTimer(aspectTimerId);
-        aspectTimerId = setTimer(140);
+        if (leftScroll !is null && rightScroll !is null)
+        {
+            bool compact = width < pointsToPixels(1000);
+            compactLayout = compact;
+            if (!leftExplicit) leftScroll.visibility = compact ? Visibility.Gone : Visibility.Visible;
+            if (!rightExplicit) rightScroll.visibility = compact ? Visibility.Gone : Visibility.Visible;
+            if (compact && leftScroll.visibility == Visibility.Visible && rightScroll.visibility == Visibility.Visible)
+                rightScroll.visibility = Visibility.Gone;
+        }
+        super.measure(width, height);
     }
 
-    void snapSixteenNine()
+    override void onDraw(DrawBuf buf)
     {
-        auto w = window;
-        if (w is null)
-            return;
-        auto st = w.windowState;
-        if (st == WindowState.maximized || st == WindowState.fullscreen)
-            return;
-        int dw = w.width;
-        int dh = w.height;
-        if (dw < 640 || dh < 360)
-            return;
-        int wantH = (dw * 9 + 8) / 16;
-        int wantW = (dh * 16 + 8) / 9;
-        if (abs(wantH - dh) <= 10 || abs(wantW - dw) <= 16)
-        {
-            lastWinW = dw;
-            lastWinH = dh;
-            return;
-        }
-        int ndw, ndh;
-        if (abs(dw - lastWinW) >= abs(dh - lastWinH))
-        {
-            ndw = dw;
-            ndh = wantH;
-        }
-        else
-        {
-            ndw = wantW;
-            ndh = dh;
-        }
-        if (ndw < 960)
-            ndw = 960;
-        if (ndh < 540)
-            ndh = 540;
-        snappingAspect = true;
-        w.resizeWindow(dlangui.core.types.Point(ndw, ndh));
-        snappingAspect = false;
-        lastWinW = ndw;
-        lastWinH = ndh;
+        super.onDraw(buf);
+        smokeDrawn = true;
+        if (smokeRequested && !smokeTimerId) smokeTimerId = setTimer(1);
     }
 
     override bool onTimer(ulong id)
     {
         if (id == peekTimerId)
         {
-            board.peeking = false;
+            session.expirePeek(peekGeneration);
+            peekTimerId = 0;
             refreshBoards();
             return false;
         }
-        if (id == aspectTimerId)
+        if (id == smokeTimerId)
         {
-            snapSixteenNine();
+            import std.stdio : writeln;
+            import core.stdc.stdlib : exit;
+            try
+            {
+                import std.exception : enforce;
+                enforce(smokeDrawn, "GUI did not draw");
+                enforce(board.tplColor.length > 0, "Embedded image did not load");
+                version (GuiRegression) runGuiRegression(this);
+                writeln("PASS GUI-SMOKE: window, sample, first draw");
+                window.close();
+            }
+            catch (Throwable error)
+            {
+                import std.stdio : stderr;
+                stderr.writeln(error);
+                exit(1);
+            }
             return false;
         }
         return super.onTimer(id);
     }
-
     void openFileDlg()
     {
         auto dlg = new FileDialog(UIString.fromRaw("お手本画像を開く"d), window, null,
@@ -640,16 +882,26 @@ final class Studio : VerticalLayout
             status.text = to!dstring("ファイルがありません: " ~ path);
             return;
         }
-        auto img = loadImage(path);
+        ColorDrawBuf img;
+        try { img = loadImage(path); }
+        catch (Exception e)
+        {
+            status.text = to!dstring("画像を読めませんでした: " ~ e.msg);
+            return;
+        }
         if (img is null)
         {
             status.text = "画像を読めませんでした。"d;
             return;
         }
+        scope(exit) destroy(img);
         auto loaded = loadColorTemplate(img);
-        board.setTemplate(loaded.ink, Mask(CanvasSize, CanvasSize), true, loaded.color);
+        session.setTemplate("image:" ~ path, loaded.ink, Mask(CanvasSize, CanvasSize), loaded.color);
+        syncingTemplate = true;
+        tplCombo.selectedItemIndex = cast(int) catalog.length + 1;
+        tplList.selectedItemIndex = cast(int) catalog.length + 1;
+        syncingTemplate = false;
         refreshBoards();
-        templateId = "image:" ~ path;
         savedThisResult = false;
         status.text = to!dstring("お手本（カラー）: " ~ path);
         refreshTrend();
@@ -665,12 +917,13 @@ final class Studio : VerticalLayout
             status.text = "サンプル画像を読めませんでした。"d;
             return;
         }
+        scope(exit) destroy(img);
         auto loaded = loadColorTemplate(img);
-        board.setTemplate(loaded.ink, Mask(CanvasSize, CanvasSize), true, loaded.color);
+        session.setTemplate("image:sample_house", loaded.ink, Mask(CanvasSize, CanvasSize), loaded.color);
         refreshBoards();
-        templateId = "image:sample_house";
         savedThisResult = false;
         status.text = "お手本: サンプル家型（線画）"d;
+        refreshTrend();
         updateDiagLive();
     }
 }

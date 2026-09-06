@@ -5,7 +5,17 @@ import std.file : exists;
 /// CJK フォント候補。dlangui 既定の Arial/DejaVu だけだと日本語が豆腐になる。
 string[] cjkFontCandidates()
 {
-    return [
+    import std.file : thisExePath;
+    import std.path : buildPath, dirName;
+    import std.process : environment;
+    auto bundled = buildPath(dirName(thisExePath()), "fonts", "NotoSansCJKjp-Regular.otf");
+    version (Windows)
+    {
+        auto fonts = buildPath(environment.get("WINDIR", "C:\\Windows"), "Fonts");
+        return [bundled, buildPath(fonts, "YuGothM.ttc"),
+                buildPath(fonts, "meiryo.ttc"), buildPath(fonts, "msgothic.ttc")];
+    }
+    else return [bundled,
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/fonts-japanese-gothic.ttf",
         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
@@ -44,5 +54,6 @@ unittest
         if (p.canFind("Windows"))
             hasWin = true;
     }
-    assert(hasNoto && hasDroid && hasWin);
+    version (Windows) assert(hasNoto);
+    else assert(hasNoto && hasDroid && hasWin);
 }
