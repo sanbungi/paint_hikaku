@@ -3,7 +3,7 @@
 ペンタブ（またはマウス）でお手本を模写し、重ね合わせと診断で「どこがどう違うか」を学ぶトレーニングアプリです。  
 上手さの点数付けではなく、位置・大きさ・傾き・抜け・はみ出し・線の揺れといった **系統的なクセ** を返します。
 
-<img width="5111" height="2853" alt="image" src="https://github.com/user-attachments/assets/2bf8ab24-04b5-4b0c-ae98-dfe14b0c1672" />
+<img width="5111" height="2853" alt="image" src="https://github.com/user-attachments/assets/2be3b980-2ea9-430c-917d-f684788e6ac0" />
 
 
 D 言語。操作は **dlangui** の標準ウィジェット（ボタン・リスト・ファイルダイアログ・チェックボックス）。キャンバス画素の表示は dlangui の SDL2 バックエンド経由です。
