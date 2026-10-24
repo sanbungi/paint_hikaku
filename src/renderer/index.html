@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:">
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' blob: data:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>paint_hikaku</title>
   <link rel="stylesheet" href="style.css">
@@ -62,6 +62,25 @@
         <label class="check"><input type="checkbox" id="showGuides" checked>補助線</label>
         <label class="check"><input type="checkbox" id="showHidden" checked>隠れ線（薄）</label>
         <p class="help">青い線がお手本。灰色の補助線（地平線・消失点）と隠れ線は採点対象外です。</p>
+      </fieldset>
+
+      <fieldset id="figureBox" hidden>
+        <legend>人物（3D）</legend>
+        <select id="pose" aria-label="ポーズ"></select>
+        <div class="slider" data-key="yawDeg" data-min="-180" data-max="180" data-label="向き {v}°"></div>
+        <div class="slider" data-key="pitchDeg" data-min="-45" data-max="60" data-label="見下ろし {v}°（−で見上げ）"></div>
+        <div class="slider" data-key="fovDeg" data-min="15" data-max="90" data-label="画角 {v}°（大きいほどパースが強い）"></div>
+        <div class="slider" data-key="zoomPct" data-min="50" data-max="160" data-label="大きさ {v}%"></div>
+        <label class="check"><input type="checkbox" id="creases" checked>内部の線も採点する</label>
+        <label class="check"><input type="checkbox" id="floorGuide" checked>床グリッドと目線（採点対象外）</label>
+        <select id="figureDisplay" aria-label="見本の表示">
+          <option value="both">見本: 陰影＋線</option>
+          <option value="shaded">見本: 陰影のみ</option>
+          <option value="lines">見本: 線のみ</option>
+        </select>
+        <button id="openVrm" type="button">VRM モデルを開く…</button>
+        <p class="help">見本をドラッグで回転、ホイールで拡大縮小。青い線（輪郭と折れ目）が採点対象です。</p>
+        <p id="figureCredit" class="help"></p>
       </fieldset>
 
       <h3>履歴（最近）</h3>

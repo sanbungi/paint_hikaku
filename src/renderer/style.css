@@ -221,3 +221,4 @@ fieldset select { width: 100%; }
   pointer-events: none;
 }
 .drop-hint[hidden] { display: none; }
+fieldset[hidden] { display: none; }

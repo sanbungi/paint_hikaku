@@ -97,7 +97,7 @@ test('GUI-PERSPECTIVE: sliders, steps and bounds', async (t) => {
   assert.ok(await perspDisabled(page), 'flat shapes disable perspective');
   await page.getByRole('option', { name: '立方体' }).click();
   assert.ok(!(await perspDisabled(page)));
-  const yaw = page.locator('.slider[data-key="yawDeg"]');
+  const yaw = page.locator('#perspBox .slider[data-key="yawDeg"]');
   await yaw.getByRole('button', { name: '1つ増やす' }).click();
   assert.equal((await state(page)).perspective.yawDeg, 33);
   assert.match(await yaw.innerText(), /水平角 33°/);
@@ -105,7 +105,7 @@ test('GUI-PERSPECTIVE: sliders, steps and bounds', async (t) => {
   await yaw.getByRole('slider').fill('70');
   await yaw.getByRole('button', { name: '1つ増やす' }).click();
   assert.equal((await state(page)).perspective.yawDeg, 70);
-  const dist = page.locator('.slider[data-key="dist"]');
+  const dist = page.locator('#perspBox .slider[data-key="dist"]');
   await dist.getByRole('slider').fill('1');
   await dist.getByRole('button', { name: '1つ減らす' }).click();
   assert.equal((await state(page)).perspective.dist, 1);
