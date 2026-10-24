@@ -9,8 +9,9 @@ export function defaultFigureView() {
     pitchDeg: 8, // 見下ろし（+）／見上げ（−）
     fovDeg: 35, // 画角: 小さいほど望遠（パースが弱い）
     zoomPct: 100, // 画面に対する大きさ
-    panX: 0, // カメラの横ずらし（半画面 = 1、右ドラッグで操作）
+    panX: 0, // カメラの横ずらし（人物の大きさ＝外接球の半径が 1）
     panY: 0, // カメラの縦ずらし
+    lineWidth: 2.5, // 採点する線の太さ（px、768² 上）
     creases: true, // 輪郭に加えて内部の折れ目も線にする
     floorGuide: true, // 床グリッドと目線（採点対象外）
     display: 'both', // 見本の表示: both=陰影＋線, shaded=陰影のみ, lines=線のみ
@@ -21,9 +22,10 @@ export const FigureLimits = {
   yawDeg: [-180, 180],
   pitchDeg: [-45, 60],
   fovDeg: [15, 90],
-  zoomPct: [50, 160],
+  zoomPct: [20, 800],
   panX: [-1.5, 1.5],
   panY: [-1.5, 1.5],
+  lineWidth: [1, 8],
 };
 
 /** Camera fields: changing them needs a new render (「この構図で描く」). */
@@ -45,8 +47,26 @@ export function figureLabel(id) {
   return `${model}・${poseById(f.poseId).labelJa}`;
 }
 
-/** Camera distance that fits a bounding sphere of `radius` in a view of `fovDeg`. */
+/** Margin around the figure when it just fits the frame. */
+export const FitMargin = 1.04;
+
+/**
+ * Camera distance that fits a bounding sphere of `radius` in a view of `fovDeg`.
+ * Below 100% the camera backs off; above, it stays and the lens zooms (a crop), so close-ups
+ * keep the perspective chosen with the field of view and never put the camera inside the model.
+ */
 export function fitDistance(radius, fovDeg, zoomPct) {
   const half = (fovDeg * Math.PI) / 360;
-  return radius / Math.sin(half) / (zoomPct / 100);
+  return (radius * FitMargin) / Math.sin(half) / Math.min(1, zoomPct / 100);
+}
+
+/** Lens zoom factor (three.js PerspectiveCamera.zoom) for a zoom percentage. */
+export function lensZoom(zoomPct) {
+  return Math.max(1, zoomPct / 100);
+}
+
+/** Half the frame height at the figure, in units of its bounding radius (for pan dragging). */
+export function halfFrameInRadius(fovDeg, zoomPct) {
+  const half = (fovDeg * Math.PI) / 360;
+  return FitMargin / Math.cos(half) / (zoomPct / 100);
 }

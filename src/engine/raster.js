@@ -36,7 +36,8 @@ export function samePixels(a, b) {
   return true;
 }
 
-export function stampDisc(m, cx, cy, radius) {
+/** Fills a disc with `value` (255 = ink, 0 = erase). */
+export function stampDisc(m, cx, cy, radius, value = 255) {
   const r = Math.ceil(radius);
   const x0 = Math.max(0, Math.floor(cx) - r);
   const y0 = Math.max(0, Math.floor(cy) - r);
@@ -48,15 +49,18 @@ export function stampDisc(m, cx, cy, radius) {
     const row = y * m.w;
     for (let x = x0; x <= x1; x++) {
       const dx = x + 0.5 - cx;
-      if (dx * dx + dy * dy <= r2) m.px[row + x] = 255;
+      if (dx * dx + dy * dy <= r2) m.px[row + x] = value;
     }
   }
 }
 
+/** Strokes in order; each may carry its own `width`, and `erase` strokes clear ink. */
 export function rasterizeStrokes(m, strokes, baseWidth = DefaultStrokeWidth) {
   for (const s of strokes) {
+    const width = s.width ?? baseWidth;
+    const value = s.erase ? 0 : 255;
     for (const p of interpolateStroke(s)) {
-      stampDisc(m, p.x, p.y, baseWidth * 0.5 * Math.max(0.08, p.pressure));
+      stampDisc(m, p.x, p.y, width * 0.5 * Math.max(0.08, p.pressure), value);
     }
   }
 }

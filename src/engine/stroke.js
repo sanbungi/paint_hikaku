@@ -37,7 +37,7 @@ export function strokeJitter(strokes) {
   let n = 0;
   for (const s of strokes) {
     const p = s.points;
-    if (p.length < 5) continue;
+    if (s.erase || p.length < 5) continue;
     for (let i = 2; i < p.length - 2; i++) {
       let cx = p[i + 2].x - p[i - 2].x;
       let cy = p[i + 2].y - p[i - 2].y;

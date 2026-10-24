@@ -58,10 +58,9 @@ export async function shot(app, name) {
   await fs.writeFile(path.join(outputDir, `${name}.png`), Buffer.from(base64, 'base64'));
 }
 
-/** RGBA of one canvas pixel in its 768×768 scoring coordinates. */
+/** RGBA of one pixel of a board in 768² scoring coordinates (independent of zoom). */
 export function canvasPixel(page, id, x, y) {
-  return page.evaluate(([cid, px, py]) => [...document.getElementById(cid).getContext('2d')
-    .getImageData(px, py, 1, 1).data], [id, x, y]);
+  return page.evaluate(([role, px, py]) => window.__paintHikaku.pixel(role, px, py), [id, x, y]);
 }
 
 /** Drags across the paper; points are in 0..1 of the visible canvas square. */

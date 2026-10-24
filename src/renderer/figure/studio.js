@@ -2,7 +2,7 @@ import * as THREE from '../vendor/three-vrm.js';
 import { CanvasSize, point } from '../../engine/types.js';
 import { Mask, rasterizePolyline } from '../../engine/raster.js';
 import { edgesFromBuffers, linearizeDepth, overlayLines } from '../../engine/edges.js';
-import { fitDistance } from '../../engine/figure.js';
+import { fitDistance, lensZoom } from '../../engine/figure.js';
 import { poseById } from '../../engine/poses.js';
 import { createMannequin } from './mannequin.js';
 
@@ -127,15 +127,16 @@ export class FigureStudio {
     return box;
   }
 
-  /** Frames the posed figure; pan shifts the view by fractions of the half frame. */
+  /** Frames the posed figure; pan shifts the view in units of the figure's bounding radius. */
   placeCamera(box, view) {
     const center = box.getCenter(new THREE.Vector3());
-    const radius = box.getBoundingSphere(new THREE.Sphere()).radius * 1.04;
+    const radius = box.getBoundingSphere(new THREE.Sphere()).radius;
     const dist = fitDistance(radius, view.fovDeg, view.zoomPct);
     const yaw = deg(view.yawDeg);
     const pitch = deg(view.pitchDeg);
     const cam = this.camera;
     cam.fov = view.fovDeg;
+    cam.zoom = lensZoom(view.zoomPct);
     cam.aspect = 1;
     cam.position.set(
       center.x + dist * Math.sin(yaw) * Math.cos(pitch),
@@ -144,10 +145,9 @@ export class FigureStudio {
     );
     cam.lookAt(center);
     cam.updateMatrixWorld(true);
-    const half = dist * Math.tan(deg(view.fovDeg) / 2);
     const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
     const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
-    cam.position.addScaledVector(right, (view.panX ?? 0) * half).addScaledVector(up, (view.panY ?? 0) * half);
+    cam.position.addScaledVector(right, (view.panX ?? 0) * radius).addScaledVector(up, (view.panY ?? 0) * radius);
     cam.near = Math.max(0.01, dist - radius * 2);
     cam.far = dist + radius * 2;
     cam.updateProjectionMatrix();
@@ -218,7 +218,7 @@ export class FigureStudio {
     const n = bake.size;
     const ink = edgesFromBuffers(
       { w: n, h: n, depth: bake.depth, coverage: bake.coverage, normals: view.creases ? bake.normals : null },
-      { radius: LineRadius },
+      { radius: (view.lineWidth ?? 2.5) / 2 },
     );
     const guides = view.floorGuide ? floorGuides(bake.camera, bake.center, n) : new Mask(n, n);
     let color = null;
@@ -227,9 +227,6 @@ export class FigureStudio {
     return { ink, guides, color };
   }
 }
-
-/** About 2.5 px wide at 768², thin enough for faces and hands. */
-const LineRadius = 1.25;
 
 /** Floor grid under the figure and the eye-level (horizon) line; never scored. */
 function floorGuides(cam, center, n) {
