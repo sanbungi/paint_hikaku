@@ -22,6 +22,10 @@ export class BoardState {
     this.memoryMode = false;
     this.peeking = false;
     this.usePressure = true;
+    this.tool = 'pen'; // 'pen' | 'eraser'
+    this.penWidth = DefaultStrokeWidth;
+    this.eraserWidth = 24;
+    this.penColor = '#1c1c20'; // display only; scoring uses the mask
   }
 
   get sampleVisible() {
@@ -57,7 +61,9 @@ export class BoardState {
 
   beginStroke(x, y, pressure) {
     this.drawing = true;
-    this.current = { points: [] };
+    this.current = this.tool === 'eraser'
+      ? { points: [], erase: true, width: this.eraserWidth }
+      : { points: [], width: this.penWidth, color: this.penColor };
     this.addPoint(x, y, pressure);
   }
 
@@ -75,15 +81,19 @@ export class BoardState {
 
   addPoint(x, y, pressure) {
     const pts = this.current.points;
-    pts.push(point(x, y, pressure));
-    const radius = DefaultStrokeWidth * 0.5 * Math.max(0.08, pressure);
-    stampDisc(this.user, x, y, radius);
+    const { width = DefaultStrokeWidth, erase = false } = this.current;
+    // The eraser ignores pressure so it always clears its full size (also when rebuilt).
+    const pr = erase ? 1 : pressure;
+    pts.push(point(x, y, pr));
+    const value = erase ? 0 : 255;
+    const radius = width * 0.5 * Math.max(0.08, pr);
+    stampDisc(this.user, x, y, radius, value);
     if (pts.length >= 2) {
       const a = pts[pts.length - 2];
       const dx = x - a.x;
       const dy = y - a.y;
       const n = Math.trunc(Math.hypot(dx, dy));
-      for (let i = 1; i < n; i++) stampDisc(this.user, a.x + (dx * i) / n, a.y + (dy * i) / n, radius);
+      for (let i = 1; i < n; i++) stampDisc(this.user, a.x + (dx * i) / n, a.y + (dy * i) / n, radius, value);
     }
   }
 

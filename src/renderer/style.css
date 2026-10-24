@@ -159,6 +159,7 @@ fieldset select { width: 100%; }
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  overflow: auto; /* only when even the minimum board size does not fit */
   display: flex;
   gap: 0.5rem;
   padding: 0.5rem;
@@ -195,10 +196,20 @@ fieldset select { width: 100%; }
 #paper { touch-action: none; cursor: crosshair; }
 .result #paper { cursor: default; }
 
-.actions { display: flex; gap: 0.4rem; justify-content: center; }
-.stage.row .actions { flex: 0 0 7.5rem; flex-direction: column; }
-.stage.column .actions { flex: 0 0 auto; flex-direction: row; flex-wrap: wrap; }
+/* The rail between the boards: drawing (or camera) tools, then the commands. */
+.actions { display: flex; gap: 0.6rem; min-height: 0; min-width: 0; }
+.stage.row .actions { flex: 0 0 8.5rem; flex-direction: column; justify-content: center; overflow-x: hidden; overflow-y: auto; }
+.stage.column .actions { flex: 0 0 auto; flex-direction: row; flex-wrap: wrap; justify-content: center; align-items: center; }
+.tools[hidden] { display: none; }
+.tools, .commands { display: flex; gap: 0.35rem; }
+.stage.row .tools, .stage.row .commands { flex-direction: column; }
+.stage.column .tools, .stage.column .commands { flex-direction: row; flex-wrap: wrap; align-items: center; }
 .stage.row .actions button { width: 100%; }
+.stage.row .actions .zoom button { width: auto; }
+.stage.row .actions .swatch { width: 1.4rem; flex: none; }
+.toolset { display: flex; gap: 0.25rem; }
+.stage.row .toolset { flex-direction: column; }
+.stage.row .commands { padding-top: 0.5rem; border-top: 1px solid var(--line); }
 
 .status {
   padding: 0.3rem 0.7rem;
@@ -228,3 +239,24 @@ fieldset[hidden] { display: none; }
 #live:active { cursor: grabbing; }
 canvas[hidden] { display: none; }
 .adjusting #paper { cursor: not-allowed; opacity: 0.6; }
+.group[hidden] { display: none; }
+.tools .tool[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.tools .width { display: grid; grid-template-columns: 1fr auto; gap: 0.1rem 0.3rem; align-items: center; font-size: 0.85rem; }
+.tools .width input { grid-column: 1 / -1; width: 100%; min-width: 0; margin: 0; }
+.stage.column .tools .width input { width: 7rem; }
+.tools output { font-variant-numeric: tabular-nums; text-align: right; }
+.swatches { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+.swatch { width: 1.4rem; height: 1.4rem; padding: 0; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line); }
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--accent); }
+.swatch[data-color="#1c1c20"] { background: #1c1c20; }
+.swatch[data-color="#3a5bd0"] { background: #3a5bd0; }
+.swatch[data-color="#c8323c"] { background: #c8323c; }
+.swatch[data-color="#2f8f4e"] { background: #2f8f4e; }
+#penColor { width: 1.6rem; height: 1.5rem; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.zoom { display: flex; flex-wrap: wrap; gap: 0.2rem; align-items: center; justify-content: center; }
+.zoom button { padding: 0.2rem 0.5rem; }
+.zoom output { min-width: 3.2em; font-size: 0.85rem; }
+body[data-tool="hand"] #paper, body[data-tool="hand"] #sample, .space-hand #paper, .space-hand #sample { cursor: grab; }
+body[data-tool="eraser"] #paper { cursor: cell; }
+#live[data-tool="move"] { cursor: move; }
+#live[data-tool="zoom"] { cursor: zoom-in; }

@@ -115,7 +115,7 @@ test('FIGURE-IDS: template ids, labels and camera fit', () => {
   assert.equal(figureLabel(vrm), 'あいう.vrm・座り（椅子）');
   assert.equal(parseFigureId('circle'), null);
   assert.ok(fitDistance(1, 30, 100) > fitDistance(1, 60, 100), 'telephoto stands further back');
-  assert.ok(Math.abs(fitDistance(1, 60, 200) - 1) < 1e-9);
+  assert.ok(Math.abs(fitDistance(1, 60, 100) - 2.08) < 1e-9, 'sphere fits with a small margin');
   const v = defaultFigureView();
   for (const [key, [lo, hi]] of Object.entries(FigureLimits)) assert.ok(v[key] >= lo && v[key] <= hi, key);
 });

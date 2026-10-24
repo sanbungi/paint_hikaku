@@ -71,12 +71,13 @@
           <div class="slider" data-key="yawDeg" data-min="-180" data-max="180" data-label="向き {v}°"></div>
           <div class="slider" data-key="pitchDeg" data-min="-45" data-max="60" data-label="見下ろし {v}°（−で見上げ）"></div>
           <div class="slider" data-key="fovDeg" data-min="15" data-max="90" data-label="画角 {v}°（大きいほどパースが強い）"></div>
-          <div class="slider" data-key="zoomPct" data-min="50" data-max="160" data-label="大きさ {v}%"></div>
+          <div class="slider" data-key="zoomPct" data-min="20" data-max="800" data-step="5" data-label="大きさ {v}%"></div>
           <button id="resetPan" type="button">ずらしを戻す</button>
-          <p class="help">見本の上で 左ドラッグ=回転、右ドラッグ=ずらす、ホイール=大きさ。</p>
+          <p class="help">見本の上で 左ドラッグ=選んだツール（回転／移動／ズーム）、右ドラッグ=移動、ホイール=大きさ。</p>
         </div>
         <button id="bakeFigure" type="button" class="primary">この構図で描く</button>
         <button id="adjustFigure" type="button" hidden>構図・ポーズを変える</button>
+        <div class="slider" id="figureLineWidth" data-min="1" data-max="8" data-step="0.5" data-label="お手本の線の太さ {v}px"></div>
         <label class="check"><input type="checkbox" id="creases" checked>内部の線も採点する</label>
         <label class="check"><input type="checkbox" id="floorGuide" checked>床グリッドと目線（採点対象外）</label>
         <select id="figureDisplay" aria-label="見本の表示">
@@ -101,11 +102,47 @@
         <div class="canvas-wrap"><canvas id="sample" width="768" height="768"></canvas><canvas id="live" hidden aria-label="3D 構図の調整"></canvas></div>
       </figure>
       <div class="actions" id="actions">
-        <button id="check" type="button" class="primary" title="Ctrl+Enter">答え合わせ</button>
-        <button id="again" type="button">もう一度</button>
-        <button id="undo" type="button" title="Ctrl+Z">アンドゥ</button>
-        <button id="clear" type="button">クリア</button>
-        <button id="save" type="button" title="Ctrl+S">記録</button>
+        <div class="tools" id="drawTools" role="toolbar" aria-label="描画ツール">
+          <div class="toolset">
+            <button id="toolPen" type="button" class="tool" title="ペン (B)">ペン</button>
+            <button id="toolEraser" type="button" class="tool" title="消しゴム (E)">消しゴム</button>
+            <button id="toolHand" type="button" class="tool" title="表示を動かす (H / Space+ドラッグ / 中ボタン)">手のひら</button>
+          </div>
+          <label class="width" title="線の太さ（採点にも使われます）"><span id="penWidthName">太さ</span>
+            <output id="penWidthOut">6px</output>
+            <input type="range" id="penWidth" min="1" max="30" step="0.5" value="6"></label>
+          <div class="swatches" role="group" aria-label="線の色">
+            <button type="button" class="swatch" data-color="#1c1c20" title="黒" aria-label="黒"></button>
+            <button type="button" class="swatch" data-color="#3a5bd0" title="青" aria-label="青"></button>
+            <button type="button" class="swatch" data-color="#c8323c" title="赤" aria-label="赤"></button>
+            <button type="button" class="swatch" data-color="#2f8f4e" title="緑" aria-label="緑"></button>
+            <input type="color" id="penColor" value="#1c1c20" title="ほかの色" aria-label="線の色を選ぶ">
+          </div>
+          <div class="zoom" role="group" aria-label="表示倍率">
+            <button id="zoomOut" type="button" title="縮小 (Ctrl+-)" aria-label="縮小">−</button>
+            <output id="zoomLevel">100%</output>
+            <button id="zoomIn" type="button" title="拡大 (Ctrl++、ホイール)" aria-label="拡大">＋</button>
+            <button id="zoomFit" type="button" title="全体を表示 (Ctrl+0)">全体</button>
+          </div>
+        </div>
+        <div class="tools" id="cameraTools" role="toolbar" aria-label="3D カメラツール" hidden>
+          <div class="toolset">
+            <button id="tool3dRotate" type="button" class="tool" title="左ドラッグで回転">回転</button>
+            <button id="tool3dMove" type="button" class="tool" title="左ドラッグで移動（右ドラッグでも可）">移動</button>
+            <button id="tool3dZoom" type="button" class="tool" title="上下ドラッグで拡大・縮小（ホイールでも可）">ズーム</button>
+          </div>
+          <div class="zoom" role="group" aria-label="3D 表示の大きさ">
+            <button id="zoom3dOut" type="button" aria-label="3D を縮小">−</button>
+            <button id="zoom3dIn" type="button" aria-label="3D を拡大">＋</button>
+          </div>
+        </div>
+        <div class="commands">
+          <button id="check" type="button" class="primary" title="Ctrl+Enter">答え合わせ</button>
+          <button id="again" type="button">もう一度</button>
+          <button id="undo" type="button" title="Ctrl+Z">アンドゥ</button>
+          <button id="clear" type="button">クリア</button>
+          <button id="save" type="button" title="Ctrl+S">記録</button>
+        </div>
       </div>
       <figure class="board">
         <figcaption>キャンバス</figcaption>

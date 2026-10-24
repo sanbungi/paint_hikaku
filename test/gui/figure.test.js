@@ -55,11 +55,37 @@ test('GUI-FIGURE: adjust with a live view, then bake once and draw', async (t) =
   await page.mouse.move(cx + box.width / 4, cy, { steps: 5 });
   await page.mouse.up({ button: 'right' });
   v = await figureView(page);
-  assert.ok(Math.abs(v.panX + 0.5) < 0.02 && Math.abs(v.panY) < 0.02, `right drag pans (${v.panX}, ${v.panY})`);
+  // A quarter of the view = half the half-frame; at 100% and 35° that is 0.545 figure radii.
+  assert.ok(Math.abs(v.panX + 0.545) < 0.02 && Math.abs(v.panY) < 0.02, `right drag pans (${v.panX}, ${v.panY})`);
   assert.deepEqual([v.yawDeg, v.pitchDeg], [76, 20], 'panning does not turn');
   await page.mouse.wheel(0, -100);
   await nextFrame(page);
   assert.ok((await figureView(page)).zoomPct > 100);
+
+  // Tool buttons for a pen tablet: the left button rotates, moves or zooms.
+  assert.ok(await isVisible(page, 'cameraTools') && !(await isVisible(page, 'drawTools')));
+  await page.getByRole('button', { name: 'ズーム', exact: true }).click();
+  const z0 = (await figureView(page)).zoomPct;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy - 120, { steps: 6 });
+  await page.mouse.up();
+  const z1 = (await figureView(page)).zoomPct;
+  assert.ok(Math.abs(z1 - z0 * 2) <= 1, `drag up 120px doubles (${z0} → ${z1})`);
+  for (let i = 0; i < 12; i++) await page.getByRole('button', { name: '3D を拡大' }).click();
+  assert.equal((await figureView(page)).zoomPct, 800, 'close-ups up to 800%');
+  await page.getByRole('button', { name: '移動', exact: true }).click();
+  const p0 = await figureView(page);
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx, cy + box.height / 4, { steps: 5 });
+  await page.mouse.up();
+  const p1 = await figureView(page);
+  assert.ok(p1.panY > p0.panY && p1.panY - p0.panY < 0.1, `fine pan when zoomed (${p0.panY} → ${p1.panY})`);
+  assert.equal(p1.yawDeg, p0.yawDeg);
+  await shot(app, 'figure-closeup');
+  for (let i = 0; i < 12; i++) await page.getByRole('button', { name: '3D を縮小' }).click();
+  await page.getByRole('button', { name: '回転', exact: true }).click();
   assert.equal((await state(page)).templateId, 'circle');
 
   await bake(page);

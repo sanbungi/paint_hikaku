@@ -3,12 +3,14 @@ import { Mask } from '../engine/raster.js';
 import { PracticeSession } from '../engine/session.js';
 import { builtinCatalog, fromRgbaInk } from '../engine/templates.js';
 import { isSolidId } from '../engine/solids.js';
-import { fitRect, squareView } from '../engine/viewgeom.js';
+import { fitRect } from '../engine/viewgeom.js';
+import { Viewport } from '../engine/viewport.js';
+import { BoardDisplay } from './boards.js';
 import { BoardRenderer } from '../engine/view.js';
 import { formatTrend, trendFor } from '../engine/trend.js';
 import { Poses, poseById } from '../engine/poses.js';
 import {
-  FigureLimits, MannequinKey, defaultFigureView, figureLabel, figureTemplateId, parseFigureId,
+  FigureLimits, MannequinKey, defaultFigureView, figureLabel, figureTemplateId, halfFrameInRadius, parseFigureId,
 } from '../engine/figure.js';
 
 const api = window.paintHikaku;
@@ -26,6 +28,7 @@ const ModeNames = { onePoint: '1点', twoPoint: '2点', threePoint: '3点', isom
 const session = new PracticeSession({ writeRecord: (record) => api.saveRecord(record) });
 const board = session.board;
 const pixels = new BoardRenderer(board);
+const viewport = new Viewport(CanvasSize);
 const catalog = builtinCatalog();
 let records = [];
 let peekTimer = 0;
@@ -39,6 +42,7 @@ const figure = {
   adjusting: false, // camera/pose step (live view, paper locked)
   bake: null, // last scoring render, reused for display options
   poseId: 'stand',
+  tool3d: 'rotate', // left-drag on the live view: rotate | move | zoom
   view: defaultFigureView(),
   sliders: {},
 };
@@ -68,30 +72,33 @@ function setStatus(text) {
 
 // ---------------------------------------------------------------- rendering
 
-const dirty = { sample: false, paper: false };
+const dirty = { sample: false, paper: false, view: false };
 let frameRequested = false;
 let firstFrameResolve;
 const firstFrame = new Promise((resolve) => { firstFrameResolve = resolve; });
+let display = null; // BoardDisplay, created once the DOM refs exist
 
-function paint(canvas, rgba) {
-  canvas.getContext('2d').putImageData(new ImageData(rgba, CanvasSize, CanvasSize), 0, 0);
-}
-
-function refreshBoards({ sample = true, paper = true } = {}) {
+/** sample: re-compose the sample pixels; paper: strokes changed; view: zoom/pan/resize only. */
+function refreshBoards({ sample = true, paper = true, view = false } = {}) {
   dirty.sample ||= sample;
   dirty.paper ||= paper;
+  dirty.view ||= view;
   if (frameRequested) return;
   frameRequested = true;
   requestAnimationFrame(() => {
     frameRequested = false;
-    if (dirty.sample) paint(ui.sample, pixels.sample());
-    if (dirty.paper) paint(ui.paper, pixels.paper());
+    if (dirty.sample) display.composeSample();
+    if (dirty.sample || dirty.view) display.drawSample();
+    if (dirty.paper || dirty.view) display.drawPaper();
     dirty.sample = false;
     dirty.paper = false;
+    dirty.view = false;
     document.body.classList.toggle('result', board.resultMode);
     firstFrameResolve();
   });
 }
+
+const refreshView = () => refreshBoards({ sample: false, paper: false, view: true });
 
 // ---------------------------------------------------------------- templates list
 
@@ -304,6 +311,8 @@ function applyFigureMode() {
   $('bakeFigure').hidden = !adjusting;
   $('adjustFigure').hidden = adjusting || !figure.active;
   for (const id of ['check', 'again', 'undo', 'clear', 'save']) $(id).disabled = adjusting;
+  $('drawTools').hidden = adjusting;
+  $('cameraTools').hidden = !adjusting;
   if (adjusting) {
     ui.diag.textContent = 'ポーズとカメラを決めたら「この構図で描く」を押してください。線を描けるようになります。';
     drawLive();
@@ -447,16 +456,22 @@ function setupFigureControls() {
   $('creases').addEventListener('change', (e) => changeDisplay({ creases: e.target.checked }));
   $('floorGuide').addEventListener('change', (e) => changeDisplay({ floorGuide: e.target.checked }));
   $('figureDisplay').addEventListener('change', (e) => changeDisplay({ display: e.target.value }));
+  figure.lineSlider = buildSlider($('figureLineWidth'), figure.view.lineWidth, (v) => {
+    if (figure.view.lineWidth !== v) changeDisplay({ lineWidth: v });
+  });
   $('openVrm').addEventListener('click', openVrmDialog);
   new ResizeObserver(drawLive).observe(ui.live);
 
-  // On the live view: left drag turns, right drag shifts (pan), the wheel zooms.
+  // On the live view the left button uses the chosen 3D tool (rotate / move / zoom);
+  // the right button always moves and the wheel always zooms, so a mouse needs no buttons.
   const clamp = (key, v) => Math.max(FigureLimits[key][0], Math.min(FigureLimits[key][1], v));
+  const zoomBy = (factor) => changeCamera({ zoomPct: Math.round(clamp('zoomPct', figure.view.zoomPct * factor)) });
   let drag = null;
   ui.live.addEventListener('contextmenu', (e) => e.preventDefault());
   ui.live.addEventListener('pointerdown', (e) => {
     if (!isAdjusting() || drag || (e.button !== 0 && e.button !== 2)) return;
-    drag = { id: e.pointerId, pan: e.button === 2, x: e.clientX, y: e.clientY, view: { ...figure.view } };
+    const mode = e.button === 2 ? 'move' : figure.tool3d;
+    drag = { id: e.pointerId, mode, x: e.clientX, y: e.clientY, view: { ...figure.view } };
     ui.live.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
@@ -464,18 +479,19 @@ function setupFigureControls() {
     if (!drag || e.pointerId !== drag.id) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
-    if (drag.pan) {
-      // Grab-and-move: the figure follows the pointer.
-      const half = ui.live.clientWidth / 2 || 1;
-      changeCamera({
-        panX: clamp('panX', drag.view.panX - dx / half),
-        panY: clamp('panY', drag.view.panY + dy / half),
-      });
-      return;
+    const v0 = drag.view;
+    if (drag.mode === 'move') {
+      // Grab-and-move: the figure follows the pointer at any zoom.
+      const perPixel = halfFrameInRadius(v0.fovDeg, v0.zoomPct) / (ui.live.clientWidth / 2 || 1);
+      changeCamera({ panX: clamp('panX', v0.panX - dx * perPixel), panY: clamp('panY', v0.panY + dy * perPixel) });
+    } else if (drag.mode === 'zoom') {
+      // Drag up to zoom in, down to zoom out (doubling every 120 px).
+      changeCamera({ zoomPct: Math.round(clamp('zoomPct', v0.zoomPct * 2 ** (-dy / 120))) });
+    } else {
+      const yawDeg = v0.yawDeg - dx * 0.5;
+      const wrapped = ((((yawDeg + 180) % 360) + 360) % 360) - 180;
+      changeCamera({ yawDeg: Math.round(wrapped), pitchDeg: Math.round(clamp('pitchDeg', v0.pitchDeg + dy * 0.3)) });
     }
-    const yawDeg = drag.view.yawDeg - dx * 0.5;
-    const wrapped = ((((yawDeg + 180) % 360) + 360) % 360) - 180;
-    changeCamera({ yawDeg: Math.round(wrapped), pitchDeg: Math.round(clamp('pitchDeg', drag.view.pitchDeg + dy * 0.3)) });
   });
   const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
   ui.live.addEventListener('pointerup', end);
@@ -483,8 +499,22 @@ function setupFigureControls() {
   ui.live.addEventListener('wheel', (e) => {
     if (!isAdjusting()) return;
     e.preventDefault();
-    changeCamera({ zoomPct: Math.round(clamp('zoomPct', figure.view.zoomPct * (e.deltaY < 0 ? 1.06 : 1 / 1.06))) });
+    zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }, { passive: false });
+  for (const [id, tool] of [['tool3dRotate', 'rotate'], ['tool3dMove', 'move'], ['tool3dZoom', 'zoom']]) {
+    $(id).addEventListener('click', () => setTool3d(tool));
+  }
+  $('zoom3dIn').addEventListener('click', () => zoomBy(1.25));
+  $('zoom3dOut').addEventListener('click', () => zoomBy(1 / 1.25));
+  setTool3d('rotate');
+}
+
+function setTool3d(tool) {
+  figure.tool3d = tool;
+  for (const [id, t] of [['tool3dRotate', 'rotate'], ['tool3dMove', 'move'], ['tool3dZoom', 'zoom']]) {
+    $(id).setAttribute('aria-pressed', String(t === tool));
+  }
+  ui.live.dataset.tool = tool;
 }
 
 // ---------------------------------------------------------------- drawing
@@ -500,23 +530,152 @@ function pressureOf(e) {
   return 1;
 }
 
-/** Canvas pixel coordinates, or null outside the visible square. */
+/** Pointer position relative to a board square, in display (CSS) pixels. */
+function boardPoint(canvas, e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top, side: r.width };
+}
+
+/** Canvas (768²) coordinates under the pointer, or null off the paper. */
 function toCanvas(e) {
-  const r = ui.paper.getBoundingClientRect();
-  const sq = squareView(r.left, r.top, r.width, r.height, Infinity, 'top');
-  if (sq.empty) return null;
-  const x = e.clientX - sq.x;
-  const y = e.clientY - sq.y;
-  if (x < 0 || y < 0 || x >= sq.w || y >= sq.h) return null;
-  const scale = CanvasSize / sq.w;
-  return { x: x * scale, y: y * scale };
+  const b = boardPoint(ui.paper, e);
+  if (!(b.side > 0)) return null;
+  const p = viewport.toCanvas(b.x, b.y, b.side);
+  if (p.x < 0 || p.y < 0 || p.x >= CanvasSize || p.y >= CanvasSize) return null;
+  return p;
+}
+
+// ---------------------------------------------------------------- tools and view
+
+const tools = { current: 'pen', spaceHeld: false };
+const ZoomStep = 1.25;
+
+function setTool(tool) {
+  tools.current = tool;
+  if (tool === 'pen' || tool === 'eraser') board.tool = tool;
+  for (const [id, t] of [['toolPen', 'pen'], ['toolEraser', 'eraser'], ['toolHand', 'hand']]) {
+    $(id).setAttribute('aria-pressed', String(t === tool));
+  }
+  document.body.dataset.tool = tool;
+  showWidth();
+}
+
+function showWidth() {
+  const eraser = tools.current === 'eraser';
+  const width = eraser ? board.eraserWidth : board.penWidth;
+  $('penWidth').max = eraser ? '80' : '30';
+  $('penWidth').value = String(width);
+  $('penWidthOut').textContent = `${width}px`;
+  $('penWidthName').textContent = eraser ? '消しゴム' : '太さ';
+}
+
+function setPenColor(color) {
+  board.penColor = color;
+  $('penColor').value = color;
+  for (const b of document.querySelectorAll('.swatch')) b.setAttribute('aria-pressed', String(b.dataset.color === color));
+}
+
+function showZoom() {
+  $('zoomLevel').textContent = `${Math.round(viewport.zoom * 100)}%`;
+}
+
+/** Zooms both boards around a point of the given board (default: its centre). */
+function zoomBoards(factor, canvas = ui.paper, e = null) {
+  const r = canvas.getBoundingClientRect();
+  const at = e ? boardPoint(canvas, e) : { x: r.width / 2, y: r.width / 2, side: r.width };
+  viewport.zoomAt(factor, at.x, at.y, at.side);
+  showZoom();
+  refreshView();
+}
+
+function fitBoards() {
+  viewport.reset();
+  showZoom();
+  refreshView();
+}
+
+/** Hand dragging (hand tool, Space, or the middle button) and wheel zoom on either board. */
+function setupViewControls() {
+  for (const canvas of [ui.sample, ui.paper]) {
+    let drag = null;
+    canvas.addEventListener('pointerdown', (e) => {
+      const hand = tools.current === 'hand' || tools.spaceHeld || e.button === 1;
+      if (!hand || drag || isAdjusting() || (e.button !== 0 && e.button !== 1)) return;
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      canvas.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    canvas.addEventListener('pointermove', (e) => {
+      if (!drag || e.pointerId !== drag.id) return;
+      viewport.panBy(e.clientX - drag.x, e.clientY - drag.y, canvas.getBoundingClientRect().width);
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      refreshView();
+    });
+    const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      zoomBoards(e.deltaY < 0 ? 1.15 : 1 / 1.15, canvas, e);
+    }, { passive: false });
+    new ResizeObserver(refreshView).observe(canvas);
+  }
+}
+
+function setupTools() {
+  $('toolPen').addEventListener('click', () => setTool('pen'));
+  $('toolEraser').addEventListener('click', () => setTool('eraser'));
+  $('toolHand').addEventListener('click', () => setTool('hand'));
+  $('penWidth').addEventListener('input', (e) => {
+    const v = Number(e.target.value);
+    if (tools.current === 'eraser') board.eraserWidth = v;
+    else board.penWidth = v;
+    showWidth();
+  });
+  for (const b of document.querySelectorAll('.swatch')) b.addEventListener('click', () => setPenColor(b.dataset.color));
+  $('penColor').addEventListener('input', (e) => setPenColor(e.target.value));
+  $('zoomIn').addEventListener('click', () => zoomBoards(ZoomStep));
+  $('zoomOut').addEventListener('click', () => zoomBoards(1 / ZoomStep));
+  $('zoomFit').addEventListener('click', fitBoards);
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+    if (e.code === 'Space' && !e.repeat) {
+      tools.spaceHeld = true;
+      document.body.classList.add('space-hand');
+      e.preventDefault();
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) {
+      if (e.key === '0') fitBoards();
+      else if (e.key === '+' || e.key === '=' || e.key === ';') zoomBoards(ZoomStep);
+      else if (e.key === '-') zoomBoards(1 / ZoomStep);
+      else return;
+      e.preventDefault();
+      return;
+    }
+    if (e.altKey) return;
+    const key = e.key.toLowerCase();
+    if (key === 'b' || key === 'p') setTool('pen');
+    else if (key === 'e') setTool('eraser');
+    else if (key === 'h') setTool('hand');
+  });
+  window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Space') return;
+    tools.spaceHeld = false;
+    document.body.classList.remove('space-hand');
+  });
+  setTool('pen');
+  setPenColor(board.penColor);
+  showZoom();
 }
 
 function setupDrawing() {
   const paper = ui.paper;
   let activePointer = null;
   paper.addEventListener('pointerdown', (e) => {
-    if (board.resultMode || isAdjusting() || activePointer !== null || e.button !== 0) return;
+    if (board.resultMode || isAdjusting() || tools.current === 'hand' || tools.spaceHeld) return;
+    if (activePointer !== null || e.button !== 0) return;
     const p = toCanvas(e);
     if (!p) return;
     activePointer = e.pointerId;
@@ -683,17 +842,19 @@ function applyPerspective(change) {
 function buildSlider(host, value, onInput) {
   const min = Number(host.dataset.min);
   const max = Number(host.dataset.max);
+  const stepSize = Number(host.dataset.step ?? 1);
   const label = document.createElement('span');
   label.className = 'label';
   const range = document.createElement('input');
   range.type = 'range';
   range.min = String(min);
   range.max = String(max);
-  range.step = '1';
+  range.step = String(stepSize);
   range.setAttribute('aria-label', host.dataset.label.replace(/\{v\}.*/, '').trim());
   const show = (v) => { label.textContent = host.dataset.label.replace('{v}', String(v)); };
   const set = (v) => {
-    const clamped = Math.max(min, Math.min(max, Math.round(v)));
+    const snapped = Math.round(v / stepSize) * stepSize;
+    const clamped = Math.max(min, Math.min(max, Number(snapped.toFixed(3))));
     range.value = String(clamped);
     show(clamped);
     onInput(clamped);
@@ -703,7 +864,7 @@ function buildSlider(host, value, onInput) {
     b.type = 'button';
     b.textContent = text;
     b.setAttribute('aria-label', name);
-    b.addEventListener('click', () => set(Number(range.value) + delta));
+    b.addEventListener('click', () => set(Number(range.value) + delta * stepSize));
     return b;
   };
   range.value = String(value);
@@ -844,7 +1005,7 @@ async function smokeTest() {
     const figureInk = board.tpl.px.reduce((n, p) => n + (p ? 1 : 0), 0);
     expect(figureInk > 3000, `3D figure has too few lines (${figureInk})`);
     await new Promise((resolve) => { requestAnimationFrame(resolve); });
-    const px = ui.sample.getContext('2d').getImageData(384, 384, 1, 1).data;
+    const px = display.pixelAt('sample', 384, 384);
     expect(px[3] === 255, 'Sample canvas was not painted');
     log.push('PASS GUI-SMOKE: window, sample, draw, check, save, 3D figure');
     api.smokeDone({ ok: true, log });
@@ -858,6 +1019,7 @@ async function smokeTest() {
 async function start() {
   buildTemplateList();
   wire();
+  setupTools();
   setupFigureControls();
   applyPanels();
   setLayout('row');
@@ -870,8 +1032,13 @@ async function start() {
 }
 
 // Read-only handle for automated GUI tests.
-window.__paintHikaku = { session, board, firstFrame, figure, records: () => records };
+window.__paintHikaku = {
+  session, board, firstFrame, figure, viewport, records: () => records,
+  pixel: (role, x, y) => display.pixelAt(role, x, y),
+};
 
+display = new BoardDisplay({ sample: ui.sample, paper: ui.paper, board, pixels, viewport });
+setupViewControls();
 setupDrawing();
 setupDrop();
 start();
