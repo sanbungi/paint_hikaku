@@ -194,7 +194,6 @@ fieldset select { width: 100%; }
   background: var(--frame);
 }
 #paper { touch-action: none; cursor: crosshair; }
-.result #paper { cursor: default; }
 
 /* The rail between the boards: drawing (or camera) tools, then the commands. */
 .actions { display: flex; gap: 0.6rem; min-height: 0; min-width: 0; }
@@ -260,3 +259,5 @@ body[data-tool="hand"] #paper, body[data-tool="hand"] #sample, .space-hand #pape
 body[data-tool="eraser"] #paper { cursor: cell; }
 #live[data-tool="move"] { cursor: move; }
 #live[data-tool="zoom"] { cursor: zoom-in; }
+.diag.stale > :not(.stale-note) { opacity: 0.55; }
+.stale-note { color: var(--accent); font-weight: 600; }

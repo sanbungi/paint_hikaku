@@ -674,10 +674,15 @@ function setupDrawing() {
   const paper = ui.paper;
   let activePointer = null;
   paper.addEventListener('pointerdown', (e) => {
-    if (board.resultMode || isAdjusting() || tools.current === 'hand' || tools.spaceHeld) return;
+    if (isAdjusting() || tools.current === 'hand' || tools.spaceHeld) return;
     if (activePointer !== null || e.button !== 0) return;
     const p = toCanvas(e);
     if (!p) return;
+    // Drawing on a checked result reopens it: the lines stay, the next check re-scores.
+    if (session.reopen()) {
+      markDiagnosisStale();
+      refreshBoards({ paper: false });
+    }
     activePointer = e.pointerId;
     paper.setPointerCapture(e.pointerId);
     board.beginStroke(p.x, p.y, pressureOf(e));
@@ -709,8 +714,21 @@ function setupDrawing() {
 
 // ---------------------------------------------------------------- commands
 
+/** Keeps the last diagnosis readable while the drawing is being corrected. */
+function markDiagnosisStale() {
+  if (ui.diag.classList.contains('stale') || !ui.diag.querySelector('.metrics')) return;
+  ui.diag.classList.add('stale');
+  const note = document.createElement('p');
+  note.className = 'stale-note';
+  note.textContent = '加筆中 — もう一度「答え合わせ」で採点し直します（下は前回の結果）。';
+  ui.diag.prepend(note);
+  setStatus('加筆中 — 「答え合わせ」で採点し直します');
+}
+
 function updateDiagLive() {
   if (board.resultMode || isAdjusting()) return;
+  if (ui.diag.classList.contains('stale') && board.strokes.length) return;
+  ui.diag.classList.remove('stale');
   ui.diag.textContent = board.memoryMode
     ? '記憶模写: 見本は隠しています。「チラ見」で数秒だけ出せます。描いて答え合わせ。'
     : '題材を選び、白い紙に描き、「答え合わせ」で採点します。';
@@ -725,6 +743,7 @@ function refreshDiagnosis() {
     + `はみ出し ${pct(m.extraRate)}%  未到達 ${pct(m.missRate)}%\n`
     + `距離（自分→お手本） ${m.chamferUserToTpl.toFixed(1)} px\n`
     + `大きさ比 ${m.scaleRatio.toFixed(2)}  ずれ (${m.dx.toFixed(0)}, ${m.dy.toFixed(0)})`;
+  ui.diag.classList.remove('stale');
   ui.diag.replaceChildren(head, ...commentsJa.map((c) => {
     const p = document.createElement('p');
     p.textContent = c;
@@ -747,6 +766,7 @@ function redo() {
 }
 
 function doUndo() {
+  if (board.resultMode) markDiagnosisStale();
   session.undo();
   refreshBoards();
   updateDiagLive();

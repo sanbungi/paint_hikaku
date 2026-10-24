@@ -56,9 +56,12 @@ export class BoardRenderer {
     return rgba;
   }
 
-  /** 真っ白な紙に自分の線だけ（見本は混ぜない）。 */
+  /**
+   * 真っ白な紙に自分の線だけ（見本は混ぜない）。位置合わせは見本側の重ねにだけ使い、
+   * 紙は描いた位置のまま（答え合わせ後に加筆しても線がずれない）。
+   */
   paper() {
-    const rgba = composePaper(this.board.userAligned());
+    const rgba = composePaper(this.board.user);
     overlayGuides(rgba, this.practiceGuides(), 200, 205, 215);
     return rgba;
   }
