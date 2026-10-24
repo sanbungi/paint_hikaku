@@ -6,33 +6,31 @@
 <img width="5111" height="2853" alt="image" src="https://github.com/user-attachments/assets/2be3b980-2ea9-430c-917d-f684788e6ac0" />
 
 
-D 言語。操作は **dlangui** の標準ウィジェット（ボタン・リスト・ファイルダイアログ・チェックボックス）。キャンバス画素の表示は dlangui の SDL2 バックエンド経由です。
+Electron（Node.js + HTML/CSS）製のデスクトップアプリです。採点エンジン（ラスタ化・比較・診断・パース）は GUI 非依存の JavaScript モジュールで、Node.js 単体でテストできます。
 
-対象: **Windows 11 x64 / Ubuntu 22.04・24.04 amd64**。両OSでSDL2＋FreeTypeを使用します。macOS・ARM64は対象外です。
+対象: **Windows 10/11 x64**（主対象）、Ubuntu 22.04・24.04 amd64（AppImage）。
 
-## 配布版
+## ダウンロード
 
-GitHub ReleasesのWindows ZIPは展開して `paint_hikaku.exe` を起動します。同梱DLL・`fonts`・`licenses`はexeと一緒に保持してください。
+- **最新のビルド**: GitHub の [Actions](../../actions/workflows/ci.yml) で成功した実行を開き、Artifacts の `paint_hikaku-windows-exe` をダウンロードします（ZIP の中に exe が入っています）。
+- **リリース版**: `v1.2.3` 形式のタグを push すると、検証済みの exe / AppImage と `SHA256SUMS` が GitHub Releases に公開されます。
 
-UbuntuではAppImageに実行権限を付けて起動します。日本語フォントとアプリ依存ライブラリは同梱しています。画面環境・OpenGLドライバーはOSのものを使います。
+| ファイル | 内容 |
+|---|---|
+| `paint_hikaku-<版>-windows-x64-portable.exe` | インストール不要。ダブルクリックで起動 |
+| `paint_hikaku-<版>-windows-x64-setup.exe` | インストーラー（スタートメニュー登録・アンインストール対応） |
+| `paint_hikaku-<版>-linux-x86_64.AppImage` | Ubuntu 用。`chmod +x` して起動 |
 
-```bash
-chmod +x paint_hikaku-*.AppImage
-./paint_hikaku-v1.0.0-x86_64.AppImage
-# FUSEを利用できない場合
-./paint_hikaku-v1.0.0-x86_64.AppImage --appimage-extract-and-run
-```
-
-ファイル名のバージョンはダウンロードしたものに読み替えてください。配布物のSHA-256はReleaseの `SHA256SUMS` に記載します。
+コード署名はしていないため、Windows の SmartScreen で「詳細情報 → 実行」が必要な場合があります。
 
 ## できること
 
-- なめらかなストローク（Catmull-Rom 補間 + 筆圧で幅）
+- なめらかなストローク（Catmull-Rom 補間 + 筆圧で幅。ペンタブの筆圧は Pointer Events で直接取得）
 - 組み込み図形: 直線・円・楕円・矩形・正三角形・正五角形・十字・S 曲線
 - 線練習: 2点を結ぶ・斜め3本・円3つ
 - 立体: 立方体・直方体・円柱・六角柱・四角錐・円錐・球
 - パース: 1点／2点／3点透視・アイソメ、水平角・上下角・距離・地平線、補助線と隠れ線（ガイドは採点対象外）
-- 画像をお手本にできる（カラーのまま表示。採点は暗い線をマスク化。PNG / JPEG）
+- 画像をお手本にできる（カラーのまま表示。採点は暗い線をマスク化。PNG / JPEG / BMP / WebP / GIF。ウィンドウへのドラッグ＆ドロップにも対応）
 - 答え合わせ: 重ね（青=お手本 / 赤=自分 / 緑=一致）・差分・距離ヒートマップ
 - 診断コメント（日本語）と参考スコア（IoU、Chamfer 距離）
 - 位置合わせなし（デフォルト）または重心合わせ
@@ -41,35 +39,28 @@ chmod +x paint_hikaku-*.AppImage
 - 記憶模写（見本を隠す）とチラ見
 - セッションをローカル JSON に記録し、同じ題材のクセ傾向を表示
 
-## ビルド
+## 開発
 
-CIのコンパイラはDMD 2.112.0に固定しています。依存: [Dub](https://dub.pm/)、SDL2、FreeType、LinuxではFontconfig・OpenGL。
-
-```bash
-# Debian/Ubuntu の例
-sudo apt install libsdl2-dev libsdl2-image-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev fonts-noto-cjk
-dub build --config=application
-./paint_hikaku
-# 自分の線画を開く
-./paint_hikaku path/to/lineart.png
-```
-
-WindowsではDMD 2.112.0の開発用ターミナルで次を実行します。DubのSDL構成がDLLをコピーします。
-
-```powershell
-dub build --config=application --arch=x86_64
-.\paint_hikaku.exe
-# 配布用の固定版SDL2・日本語フォントを含むZIP（Python 3が必要）
-python scripts/package.py windows --version local
-```
-
-単体・連続操作テスト（ウィンドウ不要）:
+Node.js 22 以上が必要です。
 
 ```bash
-dub test --config=unittest
+npm ci
+npm start                     # 起動
+npm start -- path/to/lineart.png   # 自分の線画を開いて起動
+npm test                      # 単体・シナリオ回帰（ウィンドウ不要）
+npm run test:gui              # 実ウィンドウを操作する GUI 回帰（Linux の画面なし環境では xvfb-run -a を前に付ける）
+npm run dist:win              # Windows 用 exe（portable / setup）を dist/ に生成
+npm run dist:linux            # AppImage を dist/ に生成
 ```
 
-GUIテストと回帰防止の運用は [tests/README.md](tests/README.md) を参照してください。
+構成:
+
+| パス | 役割 |
+|---|---|
+| `src/engine/` | 採点エンジン（GUI 非依存。D 版から移植） |
+| `src/main/` | Electron メインプロセス（ウィンドウ、ファイルダイアログ、履歴 JSON の保存） |
+| `src/renderer/` | 画面（HTML/CSS/JS）。描画・入力・表示切替 |
+| `test/unit/`, `test/gui/` | 回帰テスト。詳細は [test/README.md](test/README.md) |
 
 ## 操作
 
@@ -77,12 +68,12 @@ GUIテストと回帰防止の運用は [tests/README.md](tests/README.md) を�
 
 | 操作 | 方法 |
 |------|------|
-| お手本 | 左リストをクリック（図形／サンプル画像） |
-| 画像 | 「画像を開く…」（カラー表示。ファイルダイアログ） |
+| お手本 | 左リストをクリック（図形／線練習／立体／サンプル画像） |
+| 画像 | 「画像を開く…」またはウィンドウへドロップ（カラー表示） |
 | 描画 | キャンバスをドラッグ（ペンタブはマウス相当） |
-| アンドゥ / クリア / 答え合わせ / もう一度 / 記録 | 見本と紙の間のボタン |
+| アンドゥ / クリア / 答え合わせ / もう一度 / 記録 | 見本と紙の間のボタン（Ctrl+Z / Ctrl+Enter / Ctrl+S） |
 | 答え合わせ | 右ペインに重ね表示と診断 |
-| 重ね／差分／ヒート | 右のコンボボックス |
+| 重ね／差分／ヒート／スライド | 右のコンボボックス |
 | 重心合わせ | チェックボックス（形だけ見たいとき） |
 | 記録 | 「記録」。左下の履歴と、同じ題材の傾向 |
 | 配置 | ツールバー「上下 / 左右」（既定は左右。ウィンドウは自由にリサイズ） |
@@ -90,31 +81,24 @@ GUIテストと回帰防止の運用は [tests/README.md](tests/README.md) を�
 | グリッド | なし / 2分割 / 3×3 / 4×4（採点対象外） |
 | 外接箱 | お手本の外枠をガイド表示 |
 | 記憶模写 | 見本を隠す。チラ見で約2秒だけ表示 |
-| 筆圧 | ペンの圧力。マウスは Shift=細、Ctrl=太 |
+| 筆圧 | ペンタブの筆圧で線幅が変わる。マウスは Shift=細、Ctrl=太 |
 
 記録先:
 
 - Linux: `~/.local/share/paint_hikaku/sessions/`
 - Windows: `%APPDATA%\paint_hikaku\sessions\`
 
-`PAINT_HIKAKU_DATA_DIR` を設定すると保存先を変更できます。テストでは必ず一時ディレクトリを使用します。旧JSON形式は引き続き読み込めます。
+`PAINT_HIKAKU_DATA_DIR` を設定すると保存先を変更できます。テストでは必ず一時ディレクトリを使用します。保存先・JSON 形式は D 言語版と同じなので、以前の記録もそのまま読み込めます。
 
 ## CI / Release
 
-- 通常push・PR: ソース、アセット、Dub定義、テスト、スクリプト、配布設定、workflowが変わった場合に、Windows/Linuxの回帰テストとAppImage作成・Ubuntu 24.04互換性確認を実行します。READMEのみの変更では実行しません。
-- `vMAJOR.MINOR.PATCH` タグ: 変更の有無にかかわらず全検証を実行し、Windows ZIP・AppImage・SHA-256一覧をReleaseへ公開します。失敗した場合は公開しません。
-- 通常ビルドはコミットSHA、Releaseビルドはタグをファイル名に使用します。
-- ブランチ保護を設定する場合のチェック名: `Regression (ubuntu-22.04)`、`Regression (windows-2022)`、`Ubuntu 24.04 compatibility`。パス除外でworkflowが起動しないPRには必須チェックが付かないため、文書のみのPRの扱いをリポジトリ側の運用で決めてください。
-- AppImageはUbuntu 22.04でビルドしてください。新しいLinuxで作ったものは22.04互換になりません。
+- push・PR ごとに Windows / Ubuntu で単体・GUI 回帰とスモークテストを実行し、通過すると Windows exe（portable / setup）と AppImage を作って、パッケージ済みアプリでもスモークテストをしてから Artifacts に保存します。README などの `.md` だけの変更では実行しません。
+- `vMAJOR.MINOR.PATCH` タグ: タグの版番号でビルドし、exe・AppImage・`SHA256SUMS` を Release へ公開します。どれかが失敗した場合は公開しません。
+- ブランチ保護を設定する場合のチェック名: `Test (ubuntu-24.04)`、`Test (windows-2022)`、`Windows exe`、`Linux AppImage`。
 
 ## 設計の要点
 
-- 比較はベクトル一致ではなく **同じ論理解像度（768²）のラスタマスク**。なぞり訓練で厳しすぎないようにしている。
+- 比較はベクトル一致ではなく **同じ論理解像度（768²）のラスタマスク**。なぞり訓練で厳しすぎないようにしている。表示サイズはウィンドウに合わせて拡縮するが、採点解像度は変わらない。
 - デフォルトは位置合わせなし。ズレ自体が学習対象。重心合わせは「形は近いが場所が違う」を切り分けるときだけ使う。
-- 写真お手本はカラー表示。採点は輝度の暗い部分を線とみなす。
-
-フォントアトラスとサンプル画像を作り直す場合:
-
-```bash
-python3 scripts/gen_assets.py
-```
+- 写真お手本はカラー表示。採点は輝度の暗い部分を線とみなす（透明部分は紙として扱う）。
+- 画面はレンダラープロセスの素の HTML/CSS/JS（バンドラーなし）。Node.js の機能はプリロード経由の最小限の IPC（画像を開く・履歴の読み書き）だけに限定し、`contextIsolation` と `sandbox` を有効にしている。

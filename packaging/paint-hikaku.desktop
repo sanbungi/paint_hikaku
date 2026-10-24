@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=paint_hikaku
-Comment=Drawing practice and comparison
-Exec=paint_hikaku %f
-Icon=paint-hikaku
-Terminal=false
-Categories=Graphics;Education;
-MimeType=image/png;image/jpeg;

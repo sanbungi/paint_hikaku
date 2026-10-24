@@ -3,175 +3,130 @@ on:
   push:
     branches: ['**']
     tags: ['v*']
-    paths:
-      - 'source/**'
-      - 'assets/**'
-      - 'dub*.json'
-      - 'scripts/**'
-      - 'packaging/**'
-      - 'tests/**'
-      - '.github/workflows/**'
+    paths-ignore: ['**.md']
   pull_request:
-    paths:
-      - 'source/**'
-      - 'assets/**'
-      - 'dub*.json'
-      - 'scripts/**'
-      - 'packaging/**'
-      - 'tests/**'
-      - '.github/workflows/**'
+    paths-ignore: ['**.md']
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+env:
+  # Unsigned builds: never search the runner for code-signing certificates.
+  CSC_IDENTITY_AUTO_DISCOVERY: 'false'
 jobs:
-  regression:
-    name: Regression (${{ matrix.os }})
+  test:
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
+        os: [ubuntu-24.04, windows-2022]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dlang-community/setup-dlang@v1
+      - uses: actions/setup-node@v4
         with:
-          compiler: dmd-2.112.0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Linux dependencies
+          node-version: 22
+          cache: npm
+      - name: Linux display
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev fonts-noto-cjk xvfb xauth
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth fonts-noto-cjk
+      - run: npm ci
       - name: Unit and scenario regressions
-        run: python scripts/run_checks.py --name unit --timeout 900 --expect "PASS STATE-SAVE" --expect "PASS STATE-SAVE-RETRY" --expect "PASS STATE-IMAGE-PERSPECTIVE" --expect "PASS STATE-PEEK" --expect "PASS CATALOG-PERSPECTIVE" --expect "PASS GUIDES-NONSCORING" --expect "PASS HISTORY-PATHS" --expect "PASS COMPARE-PIXELS" --expect "PASS STATE-PERSPECTIVE-GUIDES" -- dub test --config=unittest --arch=x86_64
-      - name: Test CI failure detection
-        run: python -m unittest discover -s tests -p 'test_*.py'
-      - name: Build GUI regression executable
-        run: dub build --config=gui-test --arch=x86_64
-      - name: Linux GUI regressions
+        run: npm test
+      - name: GUI regressions (Linux)
         if: runner.os == 'Linux'
-        run: python scripts/run_checks.py --name gui --expect "PASS GUI-EVENTS" --expect "PASS GUI-IMAGES" --expect "PASS GUI-LAYOUT" --expect "PASS GUI-SMOKE" -- xvfb-run -a -s '-screen 0 1920x1080x24' ./paint_hikaku
-      - name: Stage Windows test runtime
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' npm run test:gui
+      - name: GUI regressions (Windows)
         if: runner.os == 'Windows'
-        run: python scripts/package.py windows --version gui --stage-only
-      - name: Windows GUI regressions
+        run: npm run test:gui
+      - name: Smoke test from source (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a node scripts/run-checks.js --name smoke --expect "PASS GUI-SMOKE" -- node_modules/.bin/electron . --no-sandbox --smoke-test
+      - name: Smoke test from source (Windows)
         if: runner.os == 'Windows'
-        run: python scripts/run_checks.py --name gui --expect "PASS GUI-EVENTS" --expect "PASS GUI-IMAGES" --expect "PASS GUI-LAYOUT" --expect "PASS GUI-SMOKE" -- dist/paint_hikaku-gui-windows-x86_64/paint_hikaku.exe
+        run: node scripts/run-checks.js --name smoke --expect "PASS GUI-SMOKE" -- node_modules/electron/dist/electron.exe . --smoke-test
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: regression-${{ matrix.os }}
+          name: test-results-${{ matrix.os }}
           path: test-results/
-          if-no-files-found: error
-  appimage:
-    name: AppImage
-    runs-on: ubuntu-22.04
-    needs: regression
+          if-no-files-found: warn
+
+  windows:
+    name: Windows exe
+    needs: test
+    runs-on: windows-2022
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: dlang-community/setup-dlang@v1
+      - uses: actions/setup-node@v4
         with:
-          compiler: dmd-2.112.0
-      - name: Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev desktop-file-utils file xvfb xauth
-      - run: dub build --config=application --build=release --arch=x86_64
-      - name: Package
-        env:
-          BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
-        run: python3 scripts/package.py linux --version "$BUILD_VERSION"
-      - name: Verify packaged application
-        run: |
-          appimage=(dist/*.AppImage)
-          python3 scripts/run_checks.py --name packaged-linux --expect "PASS GUI-SMOKE" -- xvfb-run -a "${appimage[0]}" --appimage-extract-and-run --smoke-test
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - name: Build portable exe and installer
+        run: npm run dist:win
+      - name: Smoke test the packaged app
+        run: node scripts/run-checks.js --name packaged-windows --expect "PASS GUI-SMOKE" -- dist/win-unpacked/paint_hikaku.exe --smoke-test
       - uses: actions/upload-artifact@v4
         with:
-          name: appimage
+          name: paint_hikaku-windows-exe
+          path: dist/*.exe
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: packaged-windows-logs
+          path: test-results/
+          if-no-files-found: ignore
+
+  linux:
+    name: Linux AppImage
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: sudo apt-get update && sudo apt-get install -y xvfb xauth
+      - run: npm ci
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+      - run: npm run dist:linux
+      - name: Smoke test the AppImage
+        run: |
+          appimage=(dist/*.AppImage)
+          xvfb-run -a node scripts/run-checks.js --name packaged-linux --expect "PASS GUI-SMOKE" -- "${appimage[0]}" --appimage-extract-and-run --no-sandbox --smoke-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paint_hikaku-linux-appimage
           path: dist/*.AppImage
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: appimage-logs
-          path: test-results/
-  ubuntu-compatibility:
-    name: Ubuntu 24.04 compatibility
-    runs-on: ubuntu-24.04
-    needs: appimage
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: appimage
-          path: dist
-      - run: sudo apt-get update && sudo apt-get install -y xvfb xauth libgl1
-      - name: Test AppImage without development packages
-        run: |
-          appimage=(dist/*.AppImage)
-          chmod +x "${appimage[0]}"
-          python3 scripts/run_checks.py --name ubuntu24 --expect "PASS GUI-SMOKE" -- xvfb-run -a "${appimage[0]}" --appimage-extract-and-run --smoke-test
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ubuntu24-logs
-          path: test-results/
-  windows-package:
-    name: Windows ZIP
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: windows-2022
-    needs: regression
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dlang-community/setup-dlang@v1
-        with:
-          compiler: dmd-2.112.0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - run: dub build --config=application --build=release --arch=x86_64
-      - name: Package
-        env:
-          BUILD_VERSION: ${{ github.ref_name }}
-        run: python scripts/package.py windows --version $env:BUILD_VERSION
-      - name: Verify extracted ZIP
-        shell: pwsh
-        run: |
-          $archive = Get-ChildItem dist/*.zip | Select-Object -First 1
-          Expand-Archive $archive.FullName -DestinationPath "$env:RUNNER_TEMP/portable app"
-          $binary = Get-ChildItem "$env:RUNNER_TEMP/portable app" -Recurse -Filter paint_hikaku.exe | Select-Object -First 1
-          python scripts/run_checks.py --name packaged-windows --expect 'PASS GUI-SMOKE' -- $binary.FullName --smoke-test
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-zip
-          path: dist/*.zip
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: windows-package-logs
-          path: test-results/
+
   release:
     name: Publish release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [ubuntu-compatibility, windows-package]
-    runs-on: ubuntu-22.04
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: appimage
+          pattern: paint_hikaku-*
           path: release
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-zip
-          path: release
+          merge-multiple: true
       - name: Publish verified binaries
         env:
           GH_TOKEN: ${{ github.token }}
@@ -180,6 +135,5 @@ jobs:
         working-directory: release
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH'; exit 1; }
-          sha256sum -- *.AppImage *.zip > SHA256SUMS
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes *.AppImage *.zip SHA256SUMS
-          gh release edit "$RELEASE_TAG" --draft=false
+          sha256sum -- *.exe *.AppImage > SHA256SUMS
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --generate-notes *.exe *.AppImage SHA256SUMS

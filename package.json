@@ -1,0 +1,67 @@
+{
+  "name": "paint-hikaku",
+  "productName": "paint_hikaku",
+  "version": "2.0.0",
+  "description": "お手本を模写し、重ね合わせと診断でクセを学ぶイラスト練習アプリ",
+  "license": "MIT",
+  "author": "paint_hikaku",
+  "type": "module",
+  "main": "src/main/main.js",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/unit/*.test.js\"",
+    "test:gui": "node --test --test-concurrency=1 \"test/gui/*.test.js\"",
+    "smoke": "node scripts/run-checks.js --name smoke --expect \"PASS GUI-SMOKE\" -- electron . --smoke-test",
+    "dist:win": "electron-builder --win --x64 --publish never",
+    "dist:linux": "electron-builder --linux --x64 --publish never"
+  },
+  "devDependencies": {
+    "electron": "44.9.3",
+    "electron-builder": "26.17.0",
+    "playwright-core": "1.63.0"
+  },
+  "build": {
+    "appId": "io.github.sanbungi.paint_hikaku",
+    "productName": "paint_hikaku",
+    "executableName": "paint_hikaku",
+    "artifactName": "${productName}-${version}-${os}-${arch}-${target}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ],
+      "icon": "build/icon.png"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-windows-x64-portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-windows-x64-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Graphics",
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-linux-x86_64.${ext}"
+    }
+  }
+}
