@@ -18,10 +18,6 @@ concurrency:
 env:
   # Unsigned builds: never search the runner for code-signing certificates.
   CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-  # Electron and electron-builder downloads, cached between runs.
-  ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
-  electron_config_cache: ${{ github.workspace }}/.cache/electron
-  ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 jobs:
   test:
     name: Test
@@ -35,9 +31,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # Electron's own download cache (outside the repo: its tools must not see our package.json).
       - uses: actions/cache@v4
         with:
-          path: .cache
+          path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Virtual display
         run: command -v xvfb-run || (sudo apt-get update && sudo apt-get install -y xvfb xauth)
@@ -69,7 +66,9 @@ jobs:
           cache: npm
       - uses: actions/cache@v4
         with:
-          path: .cache
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
           key: electron-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - run: npm ci
       - name: Unit tests (Windows paths and file names)
