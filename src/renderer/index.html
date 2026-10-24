@@ -66,11 +66,17 @@
 
       <fieldset id="figureBox" hidden>
         <legend>人物（3D）</legend>
-        <select id="pose" aria-label="ポーズ"></select>
-        <div class="slider" data-key="yawDeg" data-min="-180" data-max="180" data-label="向き {v}°"></div>
-        <div class="slider" data-key="pitchDeg" data-min="-45" data-max="60" data-label="見下ろし {v}°（−で見上げ）"></div>
-        <div class="slider" data-key="fovDeg" data-min="15" data-max="90" data-label="画角 {v}°（大きいほどパースが強い）"></div>
-        <div class="slider" data-key="zoomPct" data-min="50" data-max="160" data-label="大きさ {v}%"></div>
+        <div id="figureCamera" class="figure-camera">
+          <select id="pose" aria-label="ポーズ"></select>
+          <div class="slider" data-key="yawDeg" data-min="-180" data-max="180" data-label="向き {v}°"></div>
+          <div class="slider" data-key="pitchDeg" data-min="-45" data-max="60" data-label="見下ろし {v}°（−で見上げ）"></div>
+          <div class="slider" data-key="fovDeg" data-min="15" data-max="90" data-label="画角 {v}°（大きいほどパースが強い）"></div>
+          <div class="slider" data-key="zoomPct" data-min="50" data-max="160" data-label="大きさ {v}%"></div>
+          <button id="resetPan" type="button">ずらしを戻す</button>
+          <p class="help">見本の上で 左ドラッグ=回転、右ドラッグ=ずらす、ホイール=大きさ。</p>
+        </div>
+        <button id="bakeFigure" type="button" class="primary">この構図で描く</button>
+        <button id="adjustFigure" type="button" hidden>構図・ポーズを変える</button>
         <label class="check"><input type="checkbox" id="creases" checked>内部の線も採点する</label>
         <label class="check"><input type="checkbox" id="floorGuide" checked>床グリッドと目線（採点対象外）</label>
         <select id="figureDisplay" aria-label="見本の表示">
@@ -79,7 +85,7 @@
           <option value="lines">見本: 線のみ</option>
         </select>
         <button id="openVrm" type="button">VRM モデルを開く…</button>
-        <p class="help">見本をドラッグで回転、ホイールで拡大縮小。青い線（輪郭と折れ目）が採点対象です。</p>
+        <p class="help">青い線（輪郭と折れ目）が採点対象です。</p>
         <p id="figureCredit" class="help"></p>
       </fieldset>
 
@@ -92,7 +98,7 @@
     <section id="stage" class="stage row">
       <figure class="board">
         <figcaption>見本</figcaption>
-        <div class="canvas-wrap"><canvas id="sample" width="768" height="768"></canvas></div>
+        <div class="canvas-wrap"><canvas id="sample" width="768" height="768"></canvas><canvas id="live" hidden aria-label="3D 構図の調整"></canvas></div>
       </figure>
       <div class="actions" id="actions">
         <button id="check" type="button" class="primary" title="Ctrl+Enter">答え合わせ</button>

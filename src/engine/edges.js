@@ -14,7 +14,7 @@ export function linearizeDepth(fragCoordZ, near, far) {
  * `normals` are unit vectors packed xyz per pixel (stride 3) or null.
  */
 export function edgesFromBuffers({ w, h, depth, coverage, normals = null }, {
-  depthTolerance = 0.02, creaseDeg = 40, radius = 2.5,
+  depthTolerance = 0.02, creaseDeg = 40, radius = 1.25,
 } = {}) {
   const edge = new Uint8Array(w * h);
   const minDot = Math.cos((creaseDeg * Math.PI) / 180);
