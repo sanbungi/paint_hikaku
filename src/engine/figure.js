@@ -9,6 +9,8 @@ export function defaultFigureView() {
     pitchDeg: 8, // 見下ろし（+）／見上げ（−）
     fovDeg: 35, // 画角: 小さいほど望遠（パースが弱い）
     zoomPct: 100, // 画面に対する大きさ
+    panX: 0, // カメラの横ずらし（半画面 = 1、右ドラッグで操作）
+    panY: 0, // カメラの縦ずらし
     creases: true, // 輪郭に加えて内部の折れ目も線にする
     floorGuide: true, // 床グリッドと目線（採点対象外）
     display: 'both', // 見本の表示: both=陰影＋線, shaded=陰影のみ, lines=線のみ
@@ -20,10 +22,12 @@ export const FigureLimits = {
   pitchDeg: [-45, 60],
   fovDeg: [15, 90],
   zoomPct: [50, 160],
+  panX: [-1.5, 1.5],
+  panY: [-1.5, 1.5],
 };
 
-/** Fields that change the scoring lines; the rest only change what is shown. */
-export const FigureLineKeys = ['yawDeg', 'pitchDeg', 'fovDeg', 'zoomPct', 'creases'];
+/** Camera fields: changing them needs a new render (「この構図で描く」). */
+export const FigureCameraKeys = ['yawDeg', 'pitchDeg', 'fovDeg', 'zoomPct', 'panX', 'panY'];
 
 export function figureTemplateId(modelKey, poseId) {
   return `figure:${modelKey}#${poseId}`;

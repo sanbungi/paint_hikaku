@@ -35,6 +35,9 @@ const figure = {
   studio: null, // created on first use (WebGL)
   modelKey: MannequinKey,
   credit: '',
+  active: false, // the figure is the chosen subject
+  adjusting: false, // camera/pose step (live view, paper locked)
+  bake: null, // last scoring render, reused for display options
   poseId: 'stand',
   view: defaultFigureView(),
   sliders: {},
@@ -43,6 +46,7 @@ const figure = {
 const ui = {
   stage: $('stage'),
   sample: $('sample'),
+  live: $('live'),
   paper: $('paper'),
   left: $('left'),
   right: $('right'),
@@ -122,9 +126,9 @@ function buildTemplateList() {
 
 function markSelectedTemplate() {
   const id = session.templateId;
-  const fig = parseFigureId(id);
+  const fig = figure.active;
   let key = id;
-  if (fig) key = fig.modelKey === MannequinKey ? MannequinEntry : VrmEntry;
+  if (fig) key = figure.modelKey === MannequinKey ? MannequinEntry : VrmEntry;
   else if (id.startsWith('image:') && id !== SampleId) key = ExternalEntry;
   for (const b of ui.templates.querySelectorAll('button')) {
     b.setAttribute('aria-selected', String(b.dataset.key === key));
@@ -143,6 +147,7 @@ function chooseEntry(key) {
 }
 
 function afterTemplateChange() {
+  if (!parseFigureId(session.templateId)) leaveFigure();
   stopPeekTimer();
   markSelectedTemplate();
   refreshBoards();
@@ -251,39 +256,111 @@ function setupDrop() {
 }
 
 // ---------------------------------------------------------------- 3D figure
+//
+// Two steps keep it light: while adjusting, the sample shows a live 3D view (camera, pose)
+// and the paper is locked; 「この構図で描く」 renders the scoring lines once and unlocks drawing.
 
 async function ensureStudio() {
   if (figure.studio) return figure.studio;
   const { FigureStudio } = await import('./figure/studio.js');
-  figure.studio = new FigureStudio(CanvasSize);
+  figure.studio = new FigureStudio(ui.live, CanvasSize);
   figure.studio.useMannequin();
   return figure.studio;
 }
 
-function renderFigure() {
-  return figure.studio.render(figure.poseId, figure.view);
-}
+const isAdjusting = () => figure.active && figure.adjusting;
 
 function describeFigure() {
   const v = figure.view;
-  setStatus(`お手本: ${figureLabel(session.templateId)}  向き${v.yawDeg}° 見下ろし${v.pitchDeg}° 画角${v.fovDeg}°`
-    + (figure.credit ? `  ${figure.credit}` : ''));
+  const head = figure.adjusting
+    ? `構図の調整中: ${figureLabel(figureTemplateId(figure.modelKey, figure.poseId))}`
+    : `お手本: ${figureLabel(session.templateId)}`;
+  setStatus(`${head}  向き${v.yawDeg}° 見下ろし${v.pitchDeg}° 画角${v.fovDeg}°${figure.credit ? `  ${figure.credit}` : ''}`);
 }
 
-/** New subject (model or pose): starts a clean paper. */
-async function showFigure() {
+let liveFrame = 0;
+function drawLive() {
+  if (liveFrame || !isAdjusting()) return;
+  liveFrame = requestAnimationFrame(() => {
+    liveFrame = 0;
+    if (!isAdjusting()) return;
+    const scale = Math.min(window.devicePixelRatio || 1, 2);
+    const side = Math.max(1, Math.round(ui.live.clientWidth * scale));
+    try {
+      figure.studio.renderLive(figure.poseId, figure.view, side, side);
+    } catch (e) {
+      setStatus(`3D 表示に失敗しました: ${e.message}`);
+    }
+  });
+}
+
+/** Shows or hides everything that differs between adjusting and drawing. */
+function applyFigureMode() {
+  const adjusting = isAdjusting();
+  document.body.classList.toggle('adjusting', adjusting);
+  ui.live.hidden = !adjusting;
+  ui.sample.hidden = adjusting;
+  $('figureCamera').hidden = !adjusting;
+  $('bakeFigure').hidden = !adjusting;
+  $('adjustFigure').hidden = adjusting || !figure.active;
+  for (const id of ['check', 'again', 'undo', 'clear', 'save']) $(id).disabled = adjusting;
+  if (adjusting) {
+    ui.diag.textContent = 'ポーズとカメラを決めたら「この構図で描く」を押してください。線を描けるようになります。';
+    drawLive();
+  }
+}
+
+/** Opens the camera/pose step for the current model. Drawing stays until a new pose is baked. */
+function startAdjusting() {
+  figure.active = true;
+  figure.adjusting = true;
+  stopPeekTimer();
+  markSelectedTemplate();
+  applyFigureMode();
+  describeFigure();
+  $('figureCredit').textContent = figure.credit;
+}
+
+/** Renders the scoring lines for the chosen view. Same model and pose keep the drawing. */
+async function bakeFigure() {
+  let bake;
   try {
     await ensureStudio();
-    const r = renderFigure();
-    session.setTemplate(figureTemplateId(figure.modelKey, figure.poseId), r.ink, r.guides, r.color);
+    bake = figure.studio.bake(figure.poseId, figure.view);
   } catch (e) {
     setStatus(`3D 表示を準備できませんでした: ${e.message}`);
     return false;
   }
-  afterTemplateChange();
+  const { FigureStudio } = await import('./figure/studio.js');
+  figure.bake = bake;
+  const r = FigureStudio.compose(bake, figure.view);
+  const id = figureTemplateId(figure.modelKey, figure.poseId);
+  figure.adjusting = false;
+  if (session.templateId === id) {
+    session.adjustTemplate(r.ink, r.guides, r.color);
+    stopPeekTimer();
+    markSelectedTemplate();
+    refreshBoards();
+    updateDiagLive();
+  } else {
+    session.setTemplate(id, r.ink, r.guides, r.color);
+    afterTemplateChange();
+  }
+  applyFigureMode();
+  updateDiagLive();
   describeFigure();
-  $('figureCredit').textContent = figure.credit;
   return true;
+}
+
+/** Display options reuse the last bake: no 3D render. */
+async function recomposeFigure() {
+  if (!figure.bake || !parseFigureId(session.templateId)) return;
+  const { FigureStudio } = await import('./figure/studio.js');
+  const r = FigureStudio.compose(figure.bake, figure.view);
+  session.adjustTemplate(r.ink, r.guides, r.color);
+  if (board.resultMode) refreshDiagnosis();
+  else updateDiagLive();
+  refreshBoards();
 }
 
 async function useMannequin() {
@@ -295,7 +372,8 @@ async function useMannequin() {
   if (figure.modelKey !== MannequinKey) studio.useMannequin();
   figure.modelKey = MannequinKey;
   figure.credit = '';
-  return showFigure();
+  startAdjusting();
+  return true;
 }
 
 /** A model that fails to load leaves the current template untouched. */
@@ -313,7 +391,8 @@ async function useVrm(name, bytes) {
   figure.modelKey = name;
   const authors = model.authors.filter(Boolean).join('、');
   figure.credit = model.title || authors ? `モデル: ${model.title || name}${authors ? `（${authors}）` : ''}` : '';
-  return showFigure();
+  startAdjusting();
+  return true;
 }
 
 async function openVrmDialog() {
@@ -327,21 +406,25 @@ async function openVrmDialog() {
   if (file) await useVrm(file.path, file.data);
 }
 
-let viewFrame = 0;
-/** Camera or display change: same subject, the drawing stays. Coalesced to one render per frame. */
-function changeFigureView(change) {
+/** Leaves the figure step when another kind of template is chosen. */
+function leaveFigure() {
+  figure.active = false;
+  figure.adjusting = false;
+  applyFigureMode();
+}
+
+function changeCamera(change) {
+  if (!isAdjusting()) return;
   Object.assign(figure.view, change);
   for (const [key, slider] of Object.entries(figure.sliders)) slider.show(figure.view[key]);
-  if (viewFrame || !parseFigureId(session.templateId)) return;
-  viewFrame = requestAnimationFrame(() => {
-    viewFrame = 0;
-    const r = renderFigure();
-    session.adjustTemplate(r.ink, r.guides, r.color);
-    if (board.resultMode) refreshDiagnosis();
-    else updateDiagLive();
-    refreshBoards();
-    describeFigure();
-  });
+  drawLive();
+  describeFigure();
+}
+
+function changeDisplay(change) {
+  Object.assign(figure.view, change);
+  if (isAdjusting()) drawLive();
+  else recomposeFigure();
 }
 
 function setupFigureControls() {
@@ -349,41 +432,58 @@ function setupFigureControls() {
   for (const p of Poses) pose.append(new Option(p.labelJa, p.id));
   pose.addEventListener('change', () => {
     figure.poseId = poseById(pose.value).id;
-    showFigure();
+    drawLive();
+    describeFigure();
   });
-  for (const host of ui.figureBox.querySelectorAll('.slider')) {
+  for (const host of $('figureCamera').querySelectorAll('.slider')) {
     const key = host.dataset.key;
     figure.sliders[key] = buildSlider(host, figure.view[key], (v) => {
-      if (figure.view[key] !== v) changeFigureView({ [key]: v });
+      if (figure.view[key] !== v) changeCamera({ [key]: v });
     });
   }
-  $('creases').addEventListener('change', (e) => changeFigureView({ creases: e.target.checked }));
-  $('floorGuide').addEventListener('change', (e) => changeFigureView({ floorGuide: e.target.checked }));
-  $('figureDisplay').addEventListener('change', (e) => changeFigureView({ display: e.target.value }));
+  $('resetPan').addEventListener('click', () => changeCamera({ panX: 0, panY: 0 }));
+  $('bakeFigure').addEventListener('click', bakeFigure);
+  $('adjustFigure').addEventListener('click', startAdjusting);
+  $('creases').addEventListener('change', (e) => changeDisplay({ creases: e.target.checked }));
+  $('floorGuide').addEventListener('change', (e) => changeDisplay({ floorGuide: e.target.checked }));
+  $('figureDisplay').addEventListener('change', (e) => changeDisplay({ display: e.target.value }));
   $('openVrm').addEventListener('click', openVrmDialog);
+  new ResizeObserver(drawLive).observe(ui.live);
 
-  // Turn the model by dragging the sample; the wheel zooms.
-  const clamp = (key, v) => Math.max(FigureLimits[key][0], Math.min(FigureLimits[key][1], Math.round(v)));
-  const active = () => parseFigureId(session.templateId) && !board.resultMode && board.sampleVisible;
+  // On the live view: left drag turns, right drag shifts (pan), the wheel zooms.
+  const clamp = (key, v) => Math.max(FigureLimits[key][0], Math.min(FigureLimits[key][1], v));
   let drag = null;
-  ui.sample.addEventListener('pointerdown', (e) => {
-    if (!active() || e.button !== 0) return;
-    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, yaw: figure.view.yawDeg, pitch: figure.view.pitchDeg };
-    ui.sample.setPointerCapture(e.pointerId);
+  ui.live.addEventListener('contextmenu', (e) => e.preventDefault());
+  ui.live.addEventListener('pointerdown', (e) => {
+    if (!isAdjusting() || drag || (e.button !== 0 && e.button !== 2)) return;
+    drag = { id: e.pointerId, pan: e.button === 2, x: e.clientX, y: e.clientY, view: { ...figure.view } };
+    ui.live.setPointerCapture(e.pointerId);
+    e.preventDefault();
   });
-  ui.sample.addEventListener('pointermove', (e) => {
+  ui.live.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.id) return;
-    const yawDeg = drag.yaw - (e.clientX - drag.x) * 0.5;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (drag.pan) {
+      // Grab-and-move: the figure follows the pointer.
+      const half = ui.live.clientWidth / 2 || 1;
+      changeCamera({
+        panX: clamp('panX', drag.view.panX - dx / half),
+        panY: clamp('panY', drag.view.panY + dy / half),
+      });
+      return;
+    }
+    const yawDeg = drag.view.yawDeg - dx * 0.5;
     const wrapped = ((((yawDeg + 180) % 360) + 360) % 360) - 180;
-    changeFigureView({ yawDeg: Math.round(wrapped), pitchDeg: clamp('pitchDeg', drag.pitch + (e.clientY - drag.y) * 0.3) });
+    changeCamera({ yawDeg: Math.round(wrapped), pitchDeg: Math.round(clamp('pitchDeg', drag.view.pitchDeg + dy * 0.3)) });
   });
   const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
-  ui.sample.addEventListener('pointerup', end);
-  ui.sample.addEventListener('pointercancel', end);
-  ui.sample.addEventListener('wheel', (e) => {
-    if (!active()) return;
+  ui.live.addEventListener('pointerup', end);
+  ui.live.addEventListener('pointercancel', end);
+  ui.live.addEventListener('wheel', (e) => {
+    if (!isAdjusting()) return;
     e.preventDefault();
-    changeFigureView({ zoomPct: clamp('zoomPct', figure.view.zoomPct * (e.deltaY < 0 ? 1.06 : 1 / 1.06)) });
+    changeCamera({ zoomPct: Math.round(clamp('zoomPct', figure.view.zoomPct * (e.deltaY < 0 ? 1.06 : 1 / 1.06))) });
   }, { passive: false });
 }
 
@@ -416,7 +516,7 @@ function setupDrawing() {
   const paper = ui.paper;
   let activePointer = null;
   paper.addEventListener('pointerdown', (e) => {
-    if (board.resultMode || activePointer !== null || e.button !== 0) return;
+    if (board.resultMode || isAdjusting() || activePointer !== null || e.button !== 0) return;
     const p = toCanvas(e);
     if (!p) return;
     activePointer = e.pointerId;
@@ -451,7 +551,7 @@ function setupDrawing() {
 // ---------------------------------------------------------------- commands
 
 function updateDiagLive() {
-  if (board.resultMode) return;
+  if (board.resultMode || isAdjusting()) return;
   ui.diag.textContent = board.memoryMode
     ? '記憶模写: 見本は隠しています。「チラ見」で数秒だけ出せます。描いて答え合わせ。'
     : '題材を選び、白い紙に描き、「答え合わせ」で採点します。';
@@ -707,7 +807,7 @@ function wire() {
   });
 
   window.addEventListener('keydown', (e) => {
-    if (!(e.ctrlKey || e.metaKey) || e.target instanceof HTMLInputElement) return;
+    if (!(e.ctrlKey || e.metaKey) || e.target instanceof HTMLInputElement || isAdjusting()) return;
     const key = e.key.toLowerCase();
     if (key === 'z') doUndo();
     else if (key === 'enter') doCheck();
@@ -738,7 +838,9 @@ async function smokeTest() {
     await persist();
     expect(session.saved && records.length === 1, 'Record was not saved to the isolated data dir');
     figure.poseId = 'walk';
-    expect(await useMannequin(), '3D figure did not render');
+    expect(await useMannequin(), '3D view did not start');
+    await new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); });
+    expect(await bakeFigure(), '3D figure did not render');
     const figureInk = board.tpl.px.reduce((n, p) => n + (p ? 1 : 0), 0);
     expect(figureInk > 3000, `3D figure has too few lines (${figureInk})`);
     await new Promise((resolve) => { requestAnimationFrame(resolve); });

@@ -78,10 +78,15 @@ test('FIGURE-EDGES: occlusion by depth jump, crease by normal turn, both optiona
   assert.equal(edgesFromBuffers({ ...fold, normals: null }, { radius: 0.5 }).at(19, 20), 0);
 });
 
-test('FIGURE-EDGES: lines are thickened like the built-in templates', () => {
-  const thin = edgesFromBuffers(scene(40, 40, [{ x0: 10, y0: 10, x1: 30, y1: 30, d: 3 }]), { radius: 0.5 });
-  const thick = edgesFromBuffers(scene(40, 40, [{ x0: 10, y0: 10, x1: 30, y1: 30, d: 3 }]));
-  assert.ok(inkOf(thick) > inkOf(thin) * 3);
+test('FIGURE-EDGES: lines are thin but solid (about 2.5 px)', () => {
+  const square = () => scene(40, 40, [{ x0: 10, y0: 10, x1: 30, y1: 30, d: 3 }]);
+  const thin = edgesFromBuffers(square(), { radius: 0.5 });
+  const line = edgesFromBuffers(square());
+  const ratio = inkOf(line) / inkOf(thin);
+  assert.ok(ratio > 2 && ratio < 3.5, `default width ${ratio.toFixed(2)}× a 1 px outline`);
+  // A horizontal cut through the left edge: two to three pixels of ink, no gaps.
+  const row = [...Array(40).keys()].filter((x) => line.at(x, 20));
+  assert.ok(row.includes(10) && row.length >= 4 && row.length <= 6, JSON.stringify(row));
 });
 
 test('FIGURE-DEPTH: depth buffer values become camera distances', () => {
