@@ -81,9 +81,14 @@ jobs:
         shell: bash
         run: |
           npm run build
-          targets=portable
-          [[ "$GITHUB_REF" == refs/tags/v* ]] && targets="portable nsis"
-          npx electron-builder --win $targets --x64 --publish never
+          # Everyday builds: portable exe with the app stored uncompressed (LZMA took ~2 min; the
+          # artifact zip compresses it for download, and the exe starts faster without unpacking).
+          # Releases: compressed portable exe plus the installer.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            npx electron-builder --win portable nsis --x64 --publish never
+          else
+            npx electron-builder --win portable --x64 --publish never -c.compression=store
+          fi
       - name: Smoke test the packaged app
         run: node scripts/run-checks.js --name packaged-windows --expect "PASS GUI-SMOKE" -- dist/win-unpacked/paint_hikaku.exe --smoke-test
       - uses: actions/upload-artifact@v4
@@ -91,7 +96,7 @@ jobs:
           name: paint_hikaku-windows-exe
           path: dist/*.exe
           if-no-files-found: error
-          compression-level: 0 # already compressed
+          compression-level: ${{ startsWith(github.ref, 'refs/tags/v') && 0 || 1 }}
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
