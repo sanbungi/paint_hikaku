@@ -90,26 +90,48 @@ export class FigureStudio {
       type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
     });
     this.model = null;
-    this.posed = null; // { poseId, box } of the current model
+    this.mannequin = null; // kept so switching models does not reload them
+    this.vrm = null; // the last loaded VRM
+    this.posed = null; // { model, poseId, box }
+    this.onRestored = null;
+    // A GPU reset (sleep/resume, driver update) loses the context; three.js rebuilds its
+    // resources on restore, the app only needs to redraw.
+    liveCanvas.addEventListener('webglcontextrestored', () => {
+      this.posed = null;
+      this.onRestored?.();
+    });
+  }
+
+  get contextLost() {
+    return this.renderer.getContext().isContextLost();
   }
 
   setModel(model) {
-    if (this.model) {
-      this.scene.remove(this.model.scene);
-      this.model.dispose();
-    }
+    if (this.model === model) return;
+    if (this.model) this.scene.remove(this.model.scene);
     this.model = model;
-    this.posed = null;
     this.scene.add(model.scene);
   }
 
   useMannequin() {
-    this.setModel(createMannequin());
+    this.mannequin ??= createMannequin();
+    this.setModel(this.mannequin);
+  }
+
+  /** Replaces the cached VRM (the previous one is freed). */
+  useVrm(model) {
+    if (this.vrm && this.vrm !== model) {
+      if (this.model === this.vrm) this.scene.remove(this.vrm.scene);
+      this.vrm.dispose();
+      if (this.model === this.vrm) this.model = null;
+    }
+    this.vrm = model;
+    this.setModel(model);
   }
 
   /** Poses and grounds the model; the (per-vertex, slow) bounding box is cached per pose. */
   pose(poseId) {
-    if (this.posed?.poseId === poseId) return this.posed.box;
+    if (this.posed?.poseId === poseId && this.posed.model === this.model) return this.posed.box;
     const { humanoid, scene } = this.model;
     scene.position.set(0, 0, 0);
     humanoid.resetNormalizedPose();
@@ -123,7 +145,7 @@ export class FigureStudio {
     scene.position.y = -box.min.y;
     scene.updateMatrixWorld(true);
     box.translate(new THREE.Vector3(0, -box.min.y, 0));
-    this.posed = { poseId, box };
+    this.posed = { model: this.model, poseId, box };
     return box;
   }
 
@@ -189,6 +211,7 @@ export class FigureStudio {
   }
 
   bake(poseId, view) {
+    if (this.contextLost) throw new Error('GPU がリセットされました。数秒待ってからもう一度押してください');
     const n = this.size;
     const center = this.placeCamera(this.pose(poseId), view);
     this.grid.visible = false;

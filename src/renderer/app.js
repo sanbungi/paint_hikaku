@@ -17,6 +17,7 @@ const api = window.paintHikaku;
 const $ = (id) => document.getElementById(id);
 
 const PeekMs = 1800;
+const HistoryListSize = 24;
 const CompactWidth = 1000;
 const SampleId = 'image:sample_house';
 const ExternalEntry = 'external';
@@ -149,7 +150,10 @@ function chooseEntry(key) {
   if (key === SampleId) loadSample();
   else if (key === ExternalEntry) openImageDialog();
   else if (key === MannequinEntry) useMannequin();
-  else if (key === VrmEntry) openVrmDialog();
+  else if (key === VrmEntry) {
+    if (figure.studio?.vrm) useLoadedVrm();
+    else openVrmDialog();
+  }
   else selectShape(key);
 }
 
@@ -272,6 +276,10 @@ async function ensureStudio() {
   const { FigureStudio } = await import('./figure/studio.js');
   figure.studio = new FigureStudio(ui.live, CanvasSize);
   figure.studio.useMannequin();
+  figure.studio.onRestored = () => {
+    setStatus('3D 表示を復帰しました。');
+    drawLive();
+  };
   return figure.studio;
 }
 
@@ -313,10 +321,10 @@ function applyFigureMode() {
   for (const id of ['check', 'again', 'undo', 'clear', 'save']) $(id).disabled = adjusting;
   $('drawTools').hidden = adjusting;
   $('cameraTools').hidden = !adjusting;
-  if (adjusting) {
-    ui.diag.textContent = 'ポーズとカメラを決めたら「この構図で描く」を押してください。線を描けるようになります。';
-    drawLive();
-  }
+  // The instruction has its own box so the last diagnosis survives the adjust step.
+  $('adjustHint').hidden = !adjusting;
+  ui.diag.hidden = adjusting;
+  if (adjusting) drawLive();
 }
 
 /** Opens the camera/pose step for the current model. Drawing stays until a new pose is baked. */
@@ -346,17 +354,16 @@ async function bakeFigure() {
   const id = figureTemplateId(figure.modelKey, figure.poseId);
   figure.adjusting = false;
   if (session.templateId === id) {
-    session.adjustTemplate(r.ink, r.guides, r.color);
+    // Same subject, new framing: the drawing stays.
+    adjustKeepingDrawing(() => session.adjustTemplate(r.ink, r.guides, r.color));
     stopPeekTimer();
     markSelectedTemplate();
-    refreshBoards();
-    updateDiagLive();
+    applyFigureMode();
   } else {
     session.setTemplate(id, r.ink, r.guides, r.color);
+    applyFigureMode();
     afterTemplateChange();
   }
-  applyFigureMode();
-  updateDiagLive();
   describeFigure();
   return true;
 }
@@ -366,10 +373,7 @@ async function recomposeFigure() {
   if (!figure.bake || !parseFigureId(session.templateId)) return;
   const { FigureStudio } = await import('./figure/studio.js');
   const r = FigureStudio.compose(figure.bake, figure.view);
-  session.adjustTemplate(r.ink, r.guides, r.color);
-  if (board.resultMode) refreshDiagnosis();
-  else updateDiagLive();
-  refreshBoards();
+  adjustKeepingDrawing(() => session.adjustTemplate(r.ink, r.guides, r.color));
 }
 
 async function useMannequin() {
@@ -378,7 +382,7 @@ async function useMannequin() {
     return null;
   });
   if (!studio) return false;
-  if (figure.modelKey !== MannequinKey) studio.useMannequin();
+  studio.useMannequin();
   figure.modelKey = MannequinKey;
   figure.credit = '';
   startAdjusting();
@@ -396,10 +400,18 @@ async function useVrm(name, bytes) {
     setStatus(`VRM を読めませんでした: ${e.message}`);
     return false;
   }
-  figure.studio.setModel(model);
-  figure.modelKey = name;
+  figure.studio.useVrm(model);
+  figure.vrmKey = name;
   const authors = model.authors.filter(Boolean).join('、');
-  figure.credit = model.title || authors ? `モデル: ${model.title || name}${authors ? `（${authors}）` : ''}` : '';
+  figure.vrmCredit = model.title || authors ? `モデル: ${model.title || name}${authors ? `（${authors}）` : ''}` : '';
+  return useLoadedVrm();
+}
+
+/** Back to the VRM loaded earlier (kept in memory), without asking for the file again. */
+function useLoadedVrm() {
+  figure.studio.useVrm(figure.studio.vrm);
+  figure.modelKey = figure.vrmKey;
+  figure.credit = figure.vrmCredit;
   startAdjusting();
   return true;
 }
@@ -620,7 +632,28 @@ function setupViewControls() {
       zoomBoards(e.deltaY < 0 ? 1.15 : 1 / 1.15, canvas, e);
     }, { passive: false });
     new ResizeObserver(refreshView).observe(canvas);
+    // Middle-button drags pan; keep Chromium's autoscroll from starting.
+    canvas.addEventListener('mousedown', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
   }
+  watchPixelRatio(() => {
+    refreshView();
+    drawLive();
+  });
+}
+
+/**
+ * Moving the window to a monitor with another scale changes devicePixelRatio, not the CSS
+ * size, so no resize is observed. A cheap check twice a second catches every such move.
+ */
+function watchPixelRatio(onChange) {
+  let ratio = window.devicePixelRatio;
+  setInterval(() => {
+    if (window.devicePixelRatio === ratio) return;
+    ratio = window.devicePixelRatio;
+    onChange();
+  }, 500);
 }
 
 function setupTools() {
@@ -660,11 +693,16 @@ function setupTools() {
     else if (key === 'e') setTool('eraser');
     else if (key === 'h') setTool('hand');
   });
-  window.addEventListener('keyup', (e) => {
-    if (e.code !== 'Space') return;
+  const releaseSpace = () => {
     tools.spaceHeld = false;
     document.body.classList.remove('space-hand');
+  };
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') releaseSpace();
   });
+  // Alt+Tab with Space held never delivers the keyup; do not leave the pen stuck as a hand.
+  window.addEventListener('blur', releaseSpace);
+  document.addEventListener('visibilitychange', releaseSpace);
   setTool('pen');
   setPenColor(board.penColor);
   showZoom();
@@ -675,7 +713,9 @@ function setupDrawing() {
   let activePointer = null;
   paper.addEventListener('pointerdown', (e) => {
     if (isAdjusting() || tools.current === 'hand' || tools.spaceHeld) return;
-    if (activePointer !== null || e.button !== 0) return;
+    // Button 5 is the eraser end of a pen (Wacom and Windows Ink): it erases whatever tool is chosen.
+    const eraserTip = e.pointerType === 'pen' && (e.button === 5 || (e.buttons & 32) !== 0);
+    if (activePointer !== null || (e.button !== 0 && !eraserTip)) return;
     const p = toCanvas(e);
     if (!p) return;
     // Drawing on a checked result reopens it: the lines stay, the next check re-scores.
@@ -684,8 +724,15 @@ function setupDrawing() {
       refreshBoards({ paper: false });
     }
     activePointer = e.pointerId;
-    paper.setPointerCapture(e.pointerId);
+    try {
+      paper.setPointerCapture(e.pointerId);
+    } catch {
+      // Not capturable (e.g. synthetic events); drawing still works inside the paper.
+    }
+    const chosen = board.tool;
+    if (eraserTip) board.tool = 'eraser';
     board.beginStroke(p.x, p.y, pressureOf(e));
+    board.tool = chosen;
     refreshBoards({ sample: false });
     e.preventDefault();
   });
@@ -726,7 +773,7 @@ function markDiagnosisStale() {
 }
 
 function updateDiagLive() {
-  if (board.resultMode || isAdjusting()) return;
+  if (board.resultMode) return;
   if (ui.diag.classList.contains('stale') && board.strokes.length) return;
   ui.diag.classList.remove('stale');
   ui.diag.textContent = board.memoryMode
@@ -798,7 +845,7 @@ async function reloadHistory() {
     records = [];
     setStatus(`履歴を読めませんでした: ${e.message}`);
   }
-  const items = records.slice().reverse().map((r) => {
+  const items = records.slice(-HistoryListSize).reverse().map((r) => {
     const li = document.createElement('li');
     li.textContent = `${r.isoTime}  ${shortId(r.templateId)}  IoU ${r.metrics.iou.toFixed(2)}`;
     li.title = r.templateId;
@@ -851,11 +898,23 @@ function describePerspective() {
 }
 
 function applyPerspective(change) {
-  session.adjustPerspective({ ...session.perspective, ...change });
-  if (board.resultMode) refreshDiagnosis();
-  else updateDiagLive();
-  refreshBoards();
+  adjustKeepingDrawing(() => session.adjustPerspective({ ...session.perspective, ...change }));
   describePerspective();
+}
+
+/**
+ * Runs a template change that keeps the drawing. A result that survives is re-scored;
+ * one that the change invalidated stays readable as 加筆中 until the next check.
+ */
+function adjustKeepingDrawing(change) {
+  const hadResult = board.resultMode;
+  change();
+  if (board.resultMode) refreshDiagnosis();
+  else if (hadResult) {
+    ui.diag.classList.remove('stale');
+    markDiagnosisStale();
+  } else updateDiagLive();
+  refreshBoards();
 }
 
 /** Builds range + −/+ buttons; onInput gets the clamped integer value. */
@@ -990,6 +1049,7 @@ function wire() {
   window.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.target instanceof HTMLInputElement || isAdjusting()) return;
     const key = e.key.toLowerCase();
+    if (board.drawing) return; // never undo under the pen
     if (key === 'z') doUndo();
     else if (key === 'enter') doCheck();
     else if (key === 's') persist();
