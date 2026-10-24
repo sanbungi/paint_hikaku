@@ -6,6 +6,10 @@ import { isSolidId } from '../engine/solids.js';
 import { fitRect, squareView } from '../engine/viewgeom.js';
 import { BoardRenderer } from '../engine/view.js';
 import { formatTrend, trendFor } from '../engine/trend.js';
+import { Poses, poseById } from '../engine/poses.js';
+import {
+  FigureLimits, MannequinKey, defaultFigureView, figureLabel, figureTemplateId, parseFigureId,
+} from '../engine/figure.js';
 
 const api = window.paintHikaku;
 const $ = (id) => document.getElementById(id);
@@ -14,7 +18,9 @@ const PeekMs = 1800;
 const CompactWidth = 1000;
 const SampleId = 'image:sample_house';
 const ExternalEntry = 'external';
-const KindLabels = { shape: '図形', drill: '線練習', solid: '立体', image: '画像' };
+const MannequinEntry = 'figure:mannequin';
+const VrmEntry = 'figure:vrm';
+const KindLabels = { shape: '図形', drill: '線練習', solid: '立体', figure: '人物（3D）', image: '画像' };
 const ModeNames = { onePoint: '1点', twoPoint: '2点', threePoint: '3点', isometric: 'アイソメ' };
 
 const session = new PracticeSession({ writeRecord: (record) => api.saveRecord(record) });
@@ -23,6 +29,16 @@ const pixels = new BoardRenderer(board);
 const catalog = builtinCatalog();
 let records = [];
 let peekTimer = 0;
+
+/** 3D figure template: the model, its pose and the camera placement. */
+const figure = {
+  studio: null, // created on first use (WebGL)
+  modelKey: MannequinKey,
+  credit: '',
+  poseId: 'stand',
+  view: defaultFigureView(),
+  sliders: {},
+};
 
 const ui = {
   stage: $('stage'),
@@ -37,6 +53,7 @@ const ui = {
   status: $('status'),
   peek: $('peek'),
   perspBox: $('perspBox'),
+  figureBox: $('figureBox'),
   wipeSlider: $('wipeSlider'),
 };
 
@@ -76,6 +93,8 @@ function refreshBoards({ sample = true, paper = true } = {}) {
 
 function templateEntries() {
   const entries = catalog.map((t) => ({ key: t.id, label: t.labelJa, kind: t.kind }));
+  entries.push({ key: MannequinEntry, label: 'デッサン人形', kind: 'figure' });
+  entries.push({ key: VrmEntry, label: 'VRM モデル…', kind: 'figure' });
   entries.push({ key: SampleId, label: 'サンプル画像', kind: 'image' });
   entries.push({ key: ExternalEntry, label: '外部画像…', kind: 'image' });
   return entries;
@@ -103,16 +122,23 @@ function buildTemplateList() {
 
 function markSelectedTemplate() {
   const id = session.templateId;
-  const key = id.startsWith('image:') && id !== SampleId ? ExternalEntry : id;
+  const fig = parseFigureId(id);
+  let key = id;
+  if (fig) key = fig.modelKey === MannequinKey ? MannequinEntry : VrmEntry;
+  else if (id.startsWith('image:') && id !== SampleId) key = ExternalEntry;
   for (const b of ui.templates.querySelectorAll('button')) {
     b.setAttribute('aria-selected', String(b.dataset.key === key));
   }
   ui.perspBox.disabled = !isSolidId(id);
+  ui.perspBox.hidden = Boolean(fig);
+  ui.figureBox.hidden = !fig;
 }
 
 function chooseEntry(key) {
   if (key === SampleId) loadSample();
   else if (key === ExternalEntry) openImageDialog();
+  else if (key === MannequinEntry) useMannequin();
+  else if (key === VrmEntry) openVrmDialog();
   else selectShape(key);
 }
 
@@ -189,11 +215,14 @@ async function openImageDialog() {
 async function openInitialImage() {
   try {
     const file = await api.readInitialImage();
-    if (file) await useImage(`image:${file.path}`, file.data, `お手本（カラー）: ${file.path}`);
+    if (file && isVrm(file.name)) await useVrm(file.path, file.data);
+    else if (file) await useImage(`image:${file.path}`, file.data, `お手本（カラー）: ${file.path}`);
   } catch (e) {
     setStatus(e.message.includes('ENOENT') ? 'ファイルがありません。' : `画像を読めませんでした: ${e.message}`);
   }
 }
+
+const isVrm = (name) => /\.vrm$/i.test(name);
 
 function setupDrop() {
   const hint = $('dropHint');
@@ -216,8 +245,146 @@ function setupDrop() {
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
-    await useImage(`image:${file.name}`, bytes, `お手本（カラー）: ${file.name}`);
+    if (isVrm(file.name)) await useVrm(file.name, bytes);
+    else await useImage(`image:${file.name}`, bytes, `お手本（カラー）: ${file.name}`);
   });
+}
+
+// ---------------------------------------------------------------- 3D figure
+
+async function ensureStudio() {
+  if (figure.studio) return figure.studio;
+  const { FigureStudio } = await import('./figure/studio.js');
+  figure.studio = new FigureStudio(CanvasSize);
+  figure.studio.useMannequin();
+  return figure.studio;
+}
+
+function renderFigure() {
+  return figure.studio.render(figure.poseId, figure.view);
+}
+
+function describeFigure() {
+  const v = figure.view;
+  setStatus(`お手本: ${figureLabel(session.templateId)}  向き${v.yawDeg}° 見下ろし${v.pitchDeg}° 画角${v.fovDeg}°`
+    + (figure.credit ? `  ${figure.credit}` : ''));
+}
+
+/** New subject (model or pose): starts a clean paper. */
+async function showFigure() {
+  try {
+    await ensureStudio();
+    const r = renderFigure();
+    session.setTemplate(figureTemplateId(figure.modelKey, figure.poseId), r.ink, r.guides, r.color);
+  } catch (e) {
+    setStatus(`3D 表示を準備できませんでした: ${e.message}`);
+    return false;
+  }
+  afterTemplateChange();
+  describeFigure();
+  $('figureCredit').textContent = figure.credit;
+  return true;
+}
+
+async function useMannequin() {
+  const studio = await ensureStudio().catch((e) => {
+    setStatus(`3D 表示を準備できませんでした: ${e.message}`);
+    return null;
+  });
+  if (!studio) return false;
+  if (figure.modelKey !== MannequinKey) studio.useMannequin();
+  figure.modelKey = MannequinKey;
+  figure.credit = '';
+  return showFigure();
+}
+
+/** A model that fails to load leaves the current template untouched. */
+async function useVrm(name, bytes) {
+  setStatus(`VRM を読み込み中: ${name}`);
+  let model;
+  try {
+    const [{ loadVrm }] = await Promise.all([import('./figure/studio.js'), ensureStudio()]);
+    model = await loadVrm(bytes);
+  } catch (e) {
+    setStatus(`VRM を読めませんでした: ${e.message}`);
+    return false;
+  }
+  figure.studio.setModel(model);
+  figure.modelKey = name;
+  const authors = model.authors.filter(Boolean).join('、');
+  figure.credit = model.title || authors ? `モデル: ${model.title || name}${authors ? `（${authors}）` : ''}` : '';
+  return showFigure();
+}
+
+async function openVrmDialog() {
+  let file;
+  try {
+    file = await api.openVrm();
+  } catch (e) {
+    setStatus(`VRM を読めませんでした: ${e.message}`);
+    return;
+  }
+  if (file) await useVrm(file.path, file.data);
+}
+
+let viewFrame = 0;
+/** Camera or display change: same subject, the drawing stays. Coalesced to one render per frame. */
+function changeFigureView(change) {
+  Object.assign(figure.view, change);
+  for (const [key, slider] of Object.entries(figure.sliders)) slider.show(figure.view[key]);
+  if (viewFrame || !parseFigureId(session.templateId)) return;
+  viewFrame = requestAnimationFrame(() => {
+    viewFrame = 0;
+    const r = renderFigure();
+    session.adjustTemplate(r.ink, r.guides, r.color);
+    if (board.resultMode) refreshDiagnosis();
+    else updateDiagLive();
+    refreshBoards();
+    describeFigure();
+  });
+}
+
+function setupFigureControls() {
+  const pose = $('pose');
+  for (const p of Poses) pose.append(new Option(p.labelJa, p.id));
+  pose.addEventListener('change', () => {
+    figure.poseId = poseById(pose.value).id;
+    showFigure();
+  });
+  for (const host of ui.figureBox.querySelectorAll('.slider')) {
+    const key = host.dataset.key;
+    figure.sliders[key] = buildSlider(host, figure.view[key], (v) => {
+      if (figure.view[key] !== v) changeFigureView({ [key]: v });
+    });
+  }
+  $('creases').addEventListener('change', (e) => changeFigureView({ creases: e.target.checked }));
+  $('floorGuide').addEventListener('change', (e) => changeFigureView({ floorGuide: e.target.checked }));
+  $('figureDisplay').addEventListener('change', (e) => changeFigureView({ display: e.target.value }));
+  $('openVrm').addEventListener('click', openVrmDialog);
+
+  // Turn the model by dragging the sample; the wheel zooms.
+  const clamp = (key, v) => Math.max(FigureLimits[key][0], Math.min(FigureLimits[key][1], Math.round(v)));
+  const active = () => parseFigureId(session.templateId) && !board.resultMode && board.sampleVisible;
+  let drag = null;
+  ui.sample.addEventListener('pointerdown', (e) => {
+    if (!active() || e.button !== 0) return;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, yaw: figure.view.yawDeg, pitch: figure.view.pitchDeg };
+    ui.sample.setPointerCapture(e.pointerId);
+  });
+  ui.sample.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const yawDeg = drag.yaw - (e.clientX - drag.x) * 0.5;
+    const wrapped = ((((yawDeg + 180) % 360) + 360) % 360) - 180;
+    changeFigureView({ yawDeg: Math.round(wrapped), pitchDeg: clamp('pitchDeg', drag.pitch + (e.clientY - drag.y) * 0.3) });
+  });
+  const end = (e) => { if (drag && e.pointerId === drag.id) drag = null; };
+  ui.sample.addEventListener('pointerup', end);
+  ui.sample.addEventListener('pointercancel', end);
+  ui.sample.addEventListener('wheel', (e) => {
+    if (!active()) return;
+    e.preventDefault();
+    changeFigureView({ zoomPct: clamp('zoomPct', figure.view.zoomPct * (e.deltaY < 0 ? 1.06 : 1 / 1.06)) });
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------- drawing
@@ -368,6 +535,7 @@ async function reloadHistory() {
 }
 
 function shortId(id) {
+  if (parseFigureId(id)) return figureLabel(id);
   if (!id.startsWith('image:')) return catalog.find((t) => t.id === id)?.labelJa ?? id;
   return id === SampleId ? 'サンプル画像' : id.split(/[\\/]/).pop();
 }
@@ -442,6 +610,12 @@ function buildSlider(host, value, onInput) {
   show(value);
   range.addEventListener('input', () => set(Number(range.value)));
   host.append(label, step('−', -1, '1つ減らす'), range, step('+', 1, '1つ増やす'));
+  return {
+    show: (v) => {
+      range.value = String(v);
+      show(v);
+    },
+  };
 }
 
 // ---------------------------------------------------------------- layout
@@ -563,10 +737,14 @@ async function smokeTest() {
     expect(board.resultMode, 'Check did not enter result mode');
     await persist();
     expect(session.saved && records.length === 1, 'Record was not saved to the isolated data dir');
+    figure.poseId = 'walk';
+    expect(await useMannequin(), '3D figure did not render');
+    const figureInk = board.tpl.px.reduce((n, p) => n + (p ? 1 : 0), 0);
+    expect(figureInk > 3000, `3D figure has too few lines (${figureInk})`);
     await new Promise((resolve) => { requestAnimationFrame(resolve); });
     const px = ui.sample.getContext('2d').getImageData(384, 384, 1, 1).data;
     expect(px[3] === 255, 'Sample canvas was not painted');
-    log.push('PASS GUI-SMOKE: window, sample, draw, check, save');
+    log.push('PASS GUI-SMOKE: window, sample, draw, check, save, 3D figure');
     api.smokeDone({ ok: true, log });
   } catch (e) {
     api.smokeDone({ ok: false, log, error: String(e?.stack ?? e) });
@@ -578,6 +756,7 @@ async function smokeTest() {
 async function start() {
   buildTemplateList();
   wire();
+  setupFigureControls();
   applyPanels();
   setLayout('row');
   selectShape('circle');
@@ -589,7 +768,7 @@ async function start() {
 }
 
 // Read-only handle for automated GUI tests.
-window.__paintHikaku = { session, board, firstFrame, records: () => records };
+window.__paintHikaku = { session, board, firstFrame, figure, records: () => records };
 
 setupDrawing();
 setupDrop();

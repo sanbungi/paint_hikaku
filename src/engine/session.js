@@ -64,6 +64,18 @@ export class PracticeSession {
     this.saved = false;
   }
 
+  /** Re-rendered template of the same subject (e.g. a new camera angle): the drawing stays. */
+  adjustTemplate(ink, guides, color = null) {
+    if (samePixels(ink.px, this.board.tpl.px)) {
+      // Display-only change: keep the result (and its saved state).
+      this.board.guides = guides;
+      this.board.tplColor = color;
+      return;
+    }
+    this.board.setTemplate(ink, guides, false, color);
+    this.saved = false;
+  }
+
   clear() {
     this.board.clearInk();
     this.saved = false;

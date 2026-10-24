@@ -12,17 +12,26 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "node scripts/build-vendor.js",
+    "prestart": "npm run build",
     "start": "electron .",
     "test": "node --test \"test/unit/*.test.js\"",
+    "pretest:gui": "npm run build",
     "test:gui": "node --test --test-concurrency=1 \"test/gui/*.test.js\"",
+    "presmoke": "npm run build",
     "smoke": "node scripts/run-checks.js --name smoke --expect \"PASS GUI-SMOKE\" -- electron . --smoke-test",
+    "predist:win": "npm run build",
     "dist:win": "electron-builder --win --x64 --publish never",
+    "predist:linux": "npm run build",
     "dist:linux": "electron-builder --linux --x64 --publish never"
   },
   "devDependencies": {
+    "@pixiv/three-vrm": "3.5.5",
     "electron": "44.9.3",
     "electron-builder": "26.17.0",
-    "playwright-core": "1.63.0"
+    "esbuild": "0.28.2",
+    "playwright-core": "1.63.0",
+    "three": "0.186.1"
   },
   "build": {
     "appId": "io.github.sanbungi.paint_hikaku",

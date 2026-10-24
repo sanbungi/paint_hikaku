@@ -17,6 +17,10 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv);
 
+// 3D figures need WebGL. Without a usable GPU (VMs, remote desktops, CI) Chromium only offers
+// its software renderer behind this switch; the app shows local content only, never web pages.
+app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+
 if (args.smoke && !process.env.PAINT_HIKAKU_DATA_DIR) {
   console.error('Smoke tests require an isolated PAINT_HIKAKU_DATA_DIR');
   process.exit(2);
@@ -40,6 +44,16 @@ function registerIpc() {
       title: 'お手本画像を開く',
       properties: ['openFile'],
       filters: ImageFilters,
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return readImage(result.filePaths[0]);
+  });
+  ipcMain.handle('vrm:open', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(win, {
+      title: 'VRM モデルを開く',
+      properties: ['openFile'],
+      filters: [{ name: 'VRM', extensions: ['vrm'] }],
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return readImage(result.filePaths[0]);
