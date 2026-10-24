@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob: data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>paint_hikaku</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="toolbar" id="toolbar">
+    <div class="group">
+      <button id="toggleLeft" type="button" aria-controls="left" title="お手本の選択・パース設定・履歴">題材・設定</button>
+      <button id="toggleRight" type="button" aria-controls="right" title="答え合わせの表示と診断">診断</button>
+    </div>
+    <div class="group">
+      <label>配置
+        <select id="layout">
+          <option value="column">上下に並べる</option>
+          <option value="row" selected>左右に並べる</option>
+        </select>
+      </label>
+      <select id="grid" aria-label="グリッド">
+        <option value="0">グリッドなし</option>
+        <option value="2">2分割</option>
+        <option value="3">3×3</option>
+        <option value="4">4×4</option>
+      </select>
+      <label class="check"><input type="checkbox" id="bbox">外接箱</label>
+    </div>
+    <div class="group">
+      <label class="check"><input type="checkbox" id="memory">記憶模写</label>
+      <button id="peek" type="button" disabled title="見本を約2秒だけ表示">チラ見</button>
+      <label class="check" title="ペンは筆圧で線幅が変わります。マウスはShiftで細く、Ctrlで太く。">
+        <input type="checkbox" id="pressure" checked>筆圧</label>
+    </div>
+    <div class="group end">
+      <button id="openImage" type="button">画像を開く…</button>
+      <button id="sampleImage" type="button">サンプル画像</button>
+    </div>
+  </header>
+
+  <main class="body">
+    <aside id="left" class="side" aria-label="題材・設定">
+      <h2>お手本</h2>
+      <div id="templates" class="templates" role="listbox" aria-label="お手本"></div>
+
+      <fieldset id="perspBox">
+        <legend>パース設定</legend>
+        <select id="perspMode" aria-label="投影">
+          <option value="onePoint">1点透視</option>
+          <option value="twoPoint" selected>2点透視</option>
+          <option value="threePoint">3点透視</option>
+          <option value="isometric">アイソメ</option>
+        </select>
+        <div class="slider" data-key="yawDeg" data-min="0" data-max="70" data-label="水平角 {v}°"></div>
+        <div class="slider" data-key="pitchDeg" data-min="-30" data-max="35" data-label="上下角 {v}°"></div>
+        <div class="slider" data-key="dist" data-min="1" data-max="90" data-label="距離 {v}"></div>
+        <div class="slider" data-key="horizonPct" data-min="20" data-max="80" data-label="地平線 {v}%"></div>
+        <label class="check"><input type="checkbox" id="showGuides" checked>補助線</label>
+        <label class="check"><input type="checkbox" id="showHidden" checked>隠れ線（薄）</label>
+        <p class="help">青い線がお手本。灰色の補助線（地平線・消失点）と隠れ線は採点対象外です。</p>
+      </fieldset>
+
+      <h3>履歴（最近）</h3>
+      <ol id="history" class="history"></ol>
+      <h3>この題材の傾向</h3>
+      <p id="trend" class="trend">記録すると、同じ題材のクセがここに溜まります。</p>
+    </aside>
+
+    <section id="stage" class="stage row">
+      <figure class="board">
+        <figcaption>見本</figcaption>
+        <div class="canvas-wrap"><canvas id="sample" width="768" height="768"></canvas></div>
+      </figure>
+      <div class="actions" id="actions">
+        <button id="check" type="button" class="primary" title="Ctrl+Enter">答え合わせ</button>
+        <button id="again" type="button">もう一度</button>
+        <button id="undo" type="button" title="Ctrl+Z">アンドゥ</button>
+        <button id="clear" type="button">クリア</button>
+        <button id="save" type="button" title="Ctrl+S">記録</button>
+      </div>
+      <figure class="board">
+        <figcaption>キャンバス</figcaption>
+        <div class="canvas-wrap"><canvas id="paper" width="768" height="768"></canvas></div>
+      </figure>
+    </section>
+
+    <aside id="right" class="side" aria-label="診断">
+      <h2>答え合わせ</h2>
+      <select id="overlay" aria-label="比較方式">
+        <option value="overlay">重ね（青=お手本 / 赤=自分 / 緑=一致）</option>
+        <option value="diff">差分</option>
+        <option value="heat">ヒートマップ</option>
+        <option value="wipe">スライド比較</option>
+      </select>
+      <div class="slider" id="wipeSlider" data-key="wipePct" data-min="0" data-max="100"
+           data-label="スライド位置 {v}%（左=見本 / 右=自分）"></div>
+      <label class="check"><input type="checkbox" id="align">重心で位置合わせ（形だけ見る）</label>
+      <div id="diag" class="diag" aria-live="polite"></div>
+    </aside>
+  </main>
+
+  <footer id="status" class="status" role="status">位置合わせなし。点数は参考です。クセを直す練習です。</footer>
+  <div id="dropHint" class="drop-hint" hidden>ここに画像をドロップしてお手本にする</div>
+</body>
+</html>
