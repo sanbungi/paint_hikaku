@@ -230,3 +230,29 @@ test('HISTORY-TREND', () => {
   assert.equal(formatTrend(trendFor([], 'circle'), '円'), 'この題材の記録はまだありません。');
   assert.equal(nowIso(new Date(Date.UTC(2026, 0, 2, 3, 4, 5))), '2026-01-02T030405Z');
 });
+
+test('STATE-RECHECK: drawing more after a check keeps the lines and re-scores', async () => {
+  const records = [];
+  const s = session(records);
+  s.select('circle');
+  s.board.beginStroke(200, 384, 1);
+  s.board.addPoint(300, 384, 1);
+  s.board.endStroke();
+  s.check();
+  const first = s.diagnose().metrics.iou;
+  assert.equal(await s.save(), true);
+  assert.equal(s.reopen(), true);
+  assert.ok(!s.board.resultMode && !s.saved);
+  assert.equal(s.reopen(), false, 'nothing to reopen twice');
+  // Trace part of the circle: the overlap must improve.
+  s.board.beginStroke(384 + 245.76, 384, 1);
+  for (let a = 0; a <= Math.PI; a += 0.05) s.board.addPoint(384 + 245.76 * Math.cos(a), 384 + 245.76 * Math.sin(a), 1);
+  s.board.endStroke();
+  assert.equal(s.board.strokes.length, 2);
+  assert.equal(await s.save(), false, 'must check again before saving');
+  s.check();
+  assert.ok(s.diagnose().metrics.iou > first);
+  assert.equal(await s.save(), true);
+  assert.equal(records.length, 2);
+  assert.ok(records[1].metrics.iou > records[0].metrics.iou);
+});

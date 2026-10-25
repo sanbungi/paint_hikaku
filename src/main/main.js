@@ -64,7 +64,8 @@ function registerIpc() {
   ipcMain.handle('history:save', async (_event, record) => {
     await saveSession(record, sessionDir());
   });
-  ipcMain.handle('history:load', () => loadRecent(24, sessionDir()));
+  // Trends use the whole history (bounded); the list shows only the newest entries.
+  ipcMain.handle('history:load', () => loadRecent(1000, sessionDir()));
   ipcMain.on('smoke:done', (_event, result) => {
     for (const line of result.log) console.log(line);
     if (!result.ok) console.error(result.error);

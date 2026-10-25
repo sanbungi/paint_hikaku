@@ -74,6 +74,51 @@ test('GUI-EVENTS: choose, draw, check, save, align, compare, retry', async (t) =
   assert.deepEqual(errors, []);
 });
 
+test('GUI-RECHECK: keep drawing after a check, then check again', async (t) => {
+  const { page, dataDir, errors } = await launch(t);
+  await drawOnPaper(page, [[0.2, 0.5], [0.45, 0.5]]);
+  await page.getByLabel('重心で位置合わせ（形だけ見る）').check();
+  await page.getByRole('button', { name: '答え合わせ' }).click();
+  const iou = async () => Number(/参考 IoU (\d\.\d\d)/.exec(await text(page, '#diag'))[1]);
+  const first = await iou();
+  // The paper shows the ink where it was drawn, even with centroid alignment on.
+  assert.deepEqual(await canvasPixel(page, 'paper', Math.round(0.3 * 768), 384), [28, 28, 32, 255]);
+  await page.getByRole('button', { name: '記録' }).click();
+  await page.waitForFunction(() => document.getElementById('status').textContent === '記録しました。');
+
+  // Tracing the circle's right half after the check.
+  const arc = Array.from({ length: 25 }, (_, i) => {
+    const a = -Math.PI / 2 + (i / 24) * Math.PI;
+    return [0.5 + 0.32 * Math.cos(a), 0.5 + 0.32 * Math.sin(a)];
+  });
+  await drawOnPaper(page, arc);
+  let s = await state(page);
+  assert.ok(!s.resultMode && s.strokes === 2, 'drawing reopens the result and keeps the lines');
+  assert.match(await text(page, '#diag'), /加筆中/);
+  assert.match(await text(page, '#diag'), /参考 IoU/, 'the previous result stays readable');
+  assert.match(await text(page, '#status'), /加筆中/);
+  await page.getByRole('button', { name: '記録' }).click();
+  assert.equal(await text(page, '#status'), '先に答え合わせしてください。');
+
+  await page.getByRole('button', { name: '答え合わせ' }).click();
+  s = await state(page);
+  assert.ok(s.resultMode);
+  assert.doesNotMatch(await text(page, '#diag'), /加筆中/);
+  assert.ok((await iou()) > first, 'the re-check scores the corrected drawing');
+  await page.getByRole('button', { name: '記録' }).click();
+  await page.waitForFunction(() => document.getElementById('status').textContent === '記録しました。');
+  assert.equal((await sessionFiles(dataDir)).length, 2);
+
+  // Undo after a check also reopens; clearing everything returns to the plain hint.
+  await page.locator('#paper').focus();
+  await page.keyboard.press('Control+z');
+  assert.ok(!(await state(page)).resultMode);
+  assert.match(await text(page, '#diag'), /加筆中/);
+  await page.getByRole('button', { name: 'クリア' }).click();
+  assert.doesNotMatch(await text(page, '#diag'), /加筆中|参考 IoU/);
+  assert.deepEqual(errors, []);
+});
+
 test('GUI-MEMORY: hidden sample, peek for about two seconds', async (t) => {
   const { page } = await launch(t);
   const hidden = [232, 230, 224, 255];

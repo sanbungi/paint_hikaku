@@ -1,6 +1,4 @@
 import { composePaper } from '../engine/raster.js';
-import { maskCentroid } from '../engine/raster.js';
-import { AlignMode } from '../engine/types.js';
 
 const Frame = '#e8e6e0';
 const Paper = '#ffffff';
@@ -14,14 +12,6 @@ function fit(canvas) {
     canvas.height = side;
   }
   return side;
-}
-
-/** Same shift alignedUser() applies, for drawing the vector strokes aligned. */
-function alignmentShift(board) {
-  if (!board.resultMode || board.alignMode !== AlignMode.centroid) return [0, 0];
-  const ct = maskCentroid(board.tpl);
-  const cu = maskCentroid(board.user);
-  return [Math.trunc(ct.x - cu.x), Math.trunc(ct.y - cu.y)];
 }
 
 /**
@@ -50,10 +40,10 @@ export class BoardDisplay {
     this.sampleSrc.getContext('2d').putImageData(new ImageData(this.pixels.sample(), n, n), 0, 0);
   }
 
-  transform(ctx, side, shift = [0, 0]) {
+  transform(ctx, side) {
     const v = this.viewport;
     const s = v.scale(side);
-    ctx.setTransform(s, 0, 0, s, side / 2 - (v.cx - shift[0]) * s, side / 2 - (v.cy - shift[1]) * s);
+    ctx.setTransform(s, 0, 0, s, side / 2 - v.cx * s, side / 2 - v.cy * s);
   }
 
   drawSample() {
@@ -109,8 +99,7 @@ export class BoardDisplay {
   updateLayer(side) {
     const b = this.board;
     const v = this.viewport;
-    const shift = alignmentShift(b);
-    const key = `${side}:${v.zoom}:${v.cx}:${v.cy}:${shift}`;
+    const key = `${side}:${v.zoom}:${v.cx}:${v.cy}`;
     const strokes = b.strokes;
     // A finished stroke that was drawn live is already on the layer.
     const justFinished = strokes === this.layerStrokes && strokes.length === this.layerCount + 1
@@ -121,7 +110,7 @@ export class BoardDisplay {
     if (stale) {
       this.layer.width = side;
       this.layer.height = side;
-      this.transform(ctx, side, shift);
+      this.transform(ctx, side);
       for (const s of strokes) drawStroke(ctx, s, 0);
       this.layerKey = key;
       this.layerStrokes = strokes;
@@ -134,7 +123,7 @@ export class BoardDisplay {
         this.current = b.current;
         this.currentDrawn = 0;
       }
-      this.transform(ctx, side, shift);
+      this.transform(ctx, side);
       drawStroke(ctx, b.current, Math.max(0, this.currentDrawn - 1));
       this.currentDrawn = b.current.points.length;
     }
@@ -143,7 +132,7 @@ export class BoardDisplay {
   /** RGBA of one pixel in 768² scoring space (for tests and the smoke check). */
   pixelAt(role, x, y) {
     if (role === 'sample') return [...this.sampleSrc.getContext('2d').getImageData(x, y, 1, 1).data];
-    const rgba = composePaper(this.board.userAligned());
+    const rgba = composePaper(this.board.user);
     const o = (y * this.viewport.size + x) * 4;
     return [...rgba.slice(o, o + 4)];
   }

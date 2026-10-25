@@ -94,6 +94,14 @@ export class PracticeSession {
     }
   }
 
+  /** Drawing more after a check: back to drawing, keeping the lines; the next check re-scores. */
+  reopen() {
+    if (!this.board.resultMode) return false;
+    this.board.resultMode = false;
+    this.saved = false;
+    return true;
+  }
+
   setAlignment(mode) {
     if (this.board.alignMode !== mode) this.saved = false;
     this.board.alignMode = mode;
