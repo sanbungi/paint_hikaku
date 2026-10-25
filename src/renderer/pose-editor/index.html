@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <!-- 'wasm-unsafe-eval': MediaPipe runs as WebAssembly (local files only). -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' blob: data:; worker-src 'self' blob:">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ポーズエディタ - paint_hikaku</title>
+  <link rel="stylesheet" href="editor.css">
+  <script type="module" src="editor.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="group">
+      <button id="undo" type="button" title="元に戻す (Ctrl+Z)">元に戻す</button>
+      <button id="redo" type="button" title="やり直す (Ctrl+Y / Ctrl+Shift+Z)">やり直す</button>
+    </div>
+    <div class="group">
+      <button id="resetT" type="button" title="すべての回転を戻す">Tポーズ</button>
+      <button id="resetStand" type="button">立ちに戻す</button>
+      <button id="mirror" type="button" title="左右を入れ替える (M)">左右反転</button>
+      <button id="copyLeft" type="button" title="左半身のポーズを右半身へ写す">左→右</button>
+      <button id="copyRight" type="button" title="右半身のポーズを左半身へ写す">右→左</button>
+    </div>
+    <div class="group" role="group" aria-label="視点">
+      <span class="label">視点</span>
+      <button type="button" data-view="front" title="正面 (1)">正面</button>
+      <button type="button" data-view="side" title="横 (3)">横</button>
+      <button type="button" data-view="back">背面</button>
+      <button type="button" data-view="top" title="上 (7)">上</button>
+      <button type="button" data-view="angle">斜め</button>
+      <button id="frame" type="button" title="全身を表示 (F)">全身</button>
+    </div>
+    <div class="group">
+      <label class="check" title="ドラッグを終えたら一番低い所を床に合わせる"><input type="checkbox" id="autoGround" checked>自動で接地</label>
+      <label class="check" title="手が届かない所へ引っ張ると、背骨と肩も伸ばす"><input type="checkbox" id="reachAssist" checked>体ごと伸ばす</label>
+      <label class="check"><input type="checkbox" id="showSkeleton" checked>骨を表示</label>
+    </div>
+    <div class="group end">
+      <button id="useInMain" type="button" class="primary" title="保存して、メイン画面のお手本にする">メイン画面で使う</button>
+    </div>
+  </header>
+
+  <main class="body">
+    <section class="viewport" id="viewport">
+      <canvas id="view" aria-label="3D ポーズ編集"></canvas>
+      <p class="hint" id="hint">点をドラッグ＝動かす　Shift＋ドラッグ＝回す　空いた所をドラッグ＝視点を回す　右ドラッグ＝視点を動かす　ホイール＝ズーム　P＝ピン留め</p>
+      <figure id="refPanel" class="ref" hidden>
+        <canvas id="refCanvas" aria-label="元の画像と検出した骨格"></canvas>
+        <figcaption><span id="refName"></span> <button id="refClose" type="button" aria-label="参考画像を閉じる">×</button></figcaption>
+      </figure>
+      <div id="dropHint" class="drop-hint" hidden>画像をドロップしてポーズを推定 / VRM をドロップしてモデルを変える</div>
+    </section>
+
+    <aside class="panel">
+      <details open>
+        <summary>ポーズ</summary>
+        <label class="row">名前 <input type="text" id="poseName" maxlength="60" placeholder="無題のポーズ"></label>
+        <div class="row buttons">
+          <button id="save" type="button" title="Ctrl+S">保存</button>
+          <button id="saveAs" type="button">別名で保存</button>
+        </div>
+        <select id="userPoses" size="7" aria-label="自作ポーズ"></select>
+        <div class="row buttons">
+          <button id="deletePose" type="button">削除</button>
+          <button id="exportPose" type="button">書き出す…</button>
+          <button id="importPose" type="button">読み込む…</button>
+        </div>
+        <label class="row">サンプルから
+          <select id="builtinPoses" aria-label="サンプルポーズ"></select>
+        </label>
+      </details>
+
+      <details open>
+        <summary>選択中の部位</summary>
+        <p id="selName" class="sel">なし（点をクリック）</p>
+        <label class="check"><input type="checkbox" id="pin" disabled>ピン留め（ほかを動かしてもこの位置に残す）</label>
+        <label class="row">ボーン
+          <select id="bone" aria-label="角度を直接いじるボーン"></select>
+        </label>
+        <div class="angles" id="angles">
+          <label>X <input type="range" min="-180" max="180" step="1" data-axis="0"><output></output></label>
+          <label>Y <input type="range" min="-180" max="180" step="1" data-axis="1"><output></output></label>
+          <label>Z <input type="range" min="-180" max="180" step="1" data-axis="2"><output></output></label>
+        </div>
+        <button id="resetBone" type="button">このボーンを戻す</button>
+      </details>
+
+      <details open>
+        <summary>画像からポーズ（MediaPipe）</summary>
+        <div class="row buttons">
+          <button id="openImage" type="button">画像を開く…</button>
+          <label class="check"><input type="checkbox" id="mirrorImage">左右反転</label>
+        </div>
+        <p class="help">人物が1人写った写真やイラストから、関節の位置を推定してポーズにします。推定後も点で直せます。画像は外部に送信しません。</p>
+        <div id="modelBox" class="model-box">
+          <p id="modelStatus" class="help">推定には MediaPipe のポーズモデル（約 9 MB）が必要です。</p>
+          <div class="row buttons">
+            <button id="downloadModel" type="button">モデルをダウンロード</button>
+            <button id="chooseModel" type="button">ファイルを選ぶ…</button>
+          </div>
+          <progress id="modelProgress" max="1" value="0" hidden></progress>
+        </div>
+        <button id="detect" type="button" class="primary" disabled>推定してポーズにする</button>
+      </details>
+
+      <details>
+        <summary>モデル</summary>
+        <p id="modelName" class="help">デッサン人形</p>
+        <div class="row buttons">
+          <button id="useMannequin" type="button">デッサン人形</button>
+          <button id="openVrm" type="button">VRM を開く…</button>
+        </div>
+      </details>
+    </aside>
+  </main>
+  <footer id="status" class="status" role="status">準備中…</footer>
+</body>
+</html>

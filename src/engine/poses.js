@@ -93,6 +93,63 @@ export const Poses = [
   },
 ];
 
+/** Poses made in the pose editor: ids start with this prefix. */
+export const UserPosePrefix = 'user:';
+
+let userPoses = [];
+
+export const isUserPoseId = (id) => typeof id === 'string' && id.startsWith(UserPosePrefix);
+
+export function setUserPoses(list) {
+  userPoses = [];
+  for (const p of list ?? []) {
+    try {
+      userPoses.push(validatePose(p));
+    } catch {
+      // A broken entry is skipped, the others still load.
+    }
+  }
+}
+
+export const userPoseList = () => userPoses;
+
 export function poseById(id) {
-  return Poses.find((p) => p.id === id) ?? Poses[0];
+  return Poses.find((p) => p.id === id) ?? userPoses.find((p) => p.id === id) ?? Poses[0];
+}
+
+/** Label for history entries: a deleted user pose still reads as one. */
+export function poseLabel(id) {
+  const p = Poses.find((q) => q.id === id) ?? userPoses.find((q) => q.id === id);
+  if (p) return p.labelJa;
+  return isUserPoseId(id) ? '自作ポーズ' : Poses[0].labelJa;
+}
+
+const PoseBones = new Set([
+  'hips', 'spine', 'chest', 'upperChest', 'neck', 'head',
+  'leftShoulder', 'leftUpperArm', 'leftLowerArm', 'leftHand',
+  'rightShoulder', 'rightUpperArm', 'rightLowerArm', 'rightHand',
+  'leftUpperLeg', 'leftLowerLeg', 'leftFoot', 'leftToes',
+  'rightUpperLeg', 'rightLowerLeg', 'rightFoot', 'rightToes',
+]);
+
+/**
+ * Checks pose data from a file or the store: { id?, labelJa, bones: { bone: [x, y, z] }, hips? }.
+ * Returns a clean copy; throws with a message for the user.
+ */
+export function validatePose(p) {
+  if (!p || typeof p !== 'object' || !p.bones || typeof p.bones !== 'object') throw new Error('ポーズのデータではありません');
+  const bones = {};
+  for (const [name, e] of Object.entries(p.bones)) {
+    if (!PoseBones.has(name)) throw new Error(`知らないボーン名です: ${name}`);
+    if (!Array.isArray(e) || e.length !== 3 || !e.every((v) => Number.isFinite(v) && Math.abs(v) <= 360)) {
+      throw new Error(`角度が正しくありません: ${name}`);
+    }
+    bones[name] = e.map(Number);
+  }
+  const labelJa = String(p.labelJa ?? p.name ?? '').trim().slice(0, 60) || '無題のポーズ';
+  const out = { id: typeof p.id === 'string' && p.id ? p.id.slice(0, 80) : '', labelJa, bones };
+  if (Array.isArray(p.hips) && p.hips.length === 3 && p.hips.every((v) => Number.isFinite(v) && Math.abs(v) < 10)) {
+    out.hips = p.hips.map(Number);
+  }
+  return out;
 }

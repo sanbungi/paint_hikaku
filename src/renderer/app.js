@@ -8,7 +8,7 @@ import { Viewport } from '../engine/viewport.js';
 import { BoardDisplay } from './boards.js';
 import { BoardRenderer } from '../engine/view.js';
 import { formatTrend, trendFor } from '../engine/trend.js';
-import { Poses, poseById } from '../engine/poses.js';
+import { Poses, poseById, setUserPoses, userPoseList } from '../engine/poses.js';
 import {
   FigureLimits, MannequinKey, defaultFigureView, figureLabel, figureTemplateId, halfFrameInRadius, parseFigureId,
 } from '../engine/figure.js';
@@ -402,6 +402,7 @@ async function useVrm(name, bytes) {
   }
   figure.studio.useVrm(model);
   figure.vrmKey = name;
+  figure.vrmBytes = bytes; // handed to the pose editor
   const authors = model.authors.filter(Boolean).join('、');
   figure.vrmCredit = model.title || authors ? `モデル: ${model.title || name}${authors ? `（${authors}）` : ''}` : '';
   return useLoadedVrm();
@@ -448,9 +449,59 @@ function changeDisplay(change) {
   else recomposeFigure();
 }
 
+/** Sample poses, then the user's own (made in the pose editor). */
+function fillPoseSelect() {
+  const pose = $('pose');
+  pose.textContent = '';
+  for (const p of Poses) pose.append(new Option(p.labelJa, p.id));
+  const mine = userPoseList();
+  if (mine.length) {
+    const group = document.createElement('optgroup');
+    group.label = '自作ポーズ';
+    for (const p of mine) group.append(new Option(p.labelJa, p.id));
+    pose.append(group);
+  }
+  pose.value = poseById(figure.poseId).id;
+}
+
+function setUserPoseList(list) {
+  setUserPoses(list);
+  fillPoseSelect();
+  // A re-saved pose is a new object: the live view poses again.
+  drawLive();
+}
+
+/** Opens the pose editor window on the current model and pose. */
+function openPoseEditor() {
+  const vrm = figure.modelKey !== MannequinKey && figure.vrmBytes;
+  const model = vrm ? { kind: 'vrm', name: figure.vrmKey, bytes: figure.vrmBytes, credit: figure.vrmCredit } : { kind: 'mannequin' };
+  const p = poseById(figure.poseId);
+  api.openPoseEditor({ model, pose: { id: p.id, labelJa: p.labelJa, bones: p.bones, hips: p.hips } });
+  setStatus('ポーズエディタを開きました。点をドラッグしてポーズを付け、「メイン画面で使う」で戻します。');
+}
+
+/** A pose sent back from the editor becomes the figure's pose (adjusting step). */
+async function usePoseFromEditor(pose) {
+  setUserPoses([...userPoseList().filter((p) => p.id !== pose.id), pose]);
+  figure.poseId = pose.id;
+  fillPoseSelect();
+  if (!figure.active) {
+    if (figure.studio?.model) startAdjusting();
+    else if (!(await useMannequin())) return;
+  } else if (!figure.adjusting) {
+    startAdjusting();
+  }
+  drawLive();
+  describeFigure();
+}
+
 function setupFigureControls() {
   const pose = $('pose');
-  for (const p of Poses) pose.append(new Option(p.labelJa, p.id));
+  fillPoseSelect();
+  $('openPoseEditor').addEventListener('click', openPoseEditor);
+  api.onPoseFromEditor((p) => usePoseFromEditor(p));
+  api.onUserPosesChanged((list) => setUserPoseList(list));
+  api.listUserPoses().then(setUserPoseList, () => {});
   pose.addEventListener('change', () => {
     figure.poseId = poseById(pose.value).id;
     drawLive();

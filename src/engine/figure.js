@@ -1,4 +1,4 @@
-import { poseById } from './poses.js';
+import { poseLabel } from './poses.js';
 
 export const MannequinKey = 'mannequin';
 
@@ -44,7 +44,7 @@ export function figureLabel(id) {
   const f = parseFigureId(id);
   if (!f) return id;
   const model = f.modelKey === MannequinKey ? 'デッサン人形' : f.modelKey.split(/[\\/]/).pop();
-  return `${model}・${poseById(f.poseId).labelJa}`;
+  return `${model}・${poseLabel(f.poseId)}`;
 }
 
 /** Margin around the figure when it just fits the frame. */
