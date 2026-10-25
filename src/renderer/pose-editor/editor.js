@@ -5,6 +5,10 @@ import { Poses, UserPosePrefix, poseById } from '../../engine/poses.js';
 import { fitLandmarks } from '../../engine/posefit.js';
 import { PoseView } from './view3d.js';
 import { PoseConnections, createDetector, detectPose } from './detect.js';
+import {
+  Aspects, LongSides, UnderLayers, composeUnderdrawing, defaultUnderdrawingOptions, frameInView,
+} from '../../engine/underdrawing.js';
+import { renderUnderdrawing } from './underdrawing.js';
 
 /**
  * Pose editor window: full-body IK posing on the model the main window uses, saving user
@@ -43,6 +47,8 @@ const state = {
   image: null, // { bitmap, name, landmarks (image), world }
   modelBytes: null, // MediaPipe model
   sliderUndo: false,
+  ud: defaultUnderdrawingOptions(), // underdrawing export options
+  poseVersion: 0, // bumps on every pose change (preview refresh)
 };
 
 const view = new PoseView($('view'));
@@ -119,6 +125,7 @@ function update() {
   $('undo').disabled = !poser.undoStack.length;
   $('redo').disabled = !poser.redoStack.length;
   showAngles();
+  state.poseVersion++;
 }
 
 function changed() {
@@ -247,6 +254,9 @@ function setupPointer() {
     e.preventDefault();
     view.zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12);
   }, { passive: false });
+  view.onRendered = afterViewRender;
+  // A GPU reset can leave a blank preview behind: draw it again once the context is back.
+  view.onRestored = () => { previewKey = ''; };
   canvas.tabIndex = 0;
 }
 
@@ -539,6 +549,182 @@ function setupDrop() {
   });
 }
 
+// ---------------------------------------------------------------- underdrawing export
+
+/** The skeleton as world-space segments, joints and a head circle (the "アタリ" layer). */
+function exportSkeleton() {
+  const poser = state.poser;
+  const f = poser.fk();
+  const skel = state.rig.skel;
+  const w = (p) => view.rigToWorld(p);
+  const segments = [];
+  for (const n of skel.names) {
+    const p = skel.parentOf(n);
+    if (p && n !== 'head') segments.push([w(f.pos[p]), w(f.pos[n])]);
+  }
+  const center = w(poser.headPoint(f));
+  const radius = w(f.pos.head).distanceTo(center) * 1.15;
+  const joints = Object.values(poser.handlePositions(f)).slice(2).map(w);
+  return { segments, joints, head: { center, radius } };
+}
+
+const exportName = () => $('poseName').value.trim() || '下絵';
+
+function renderExport(longSide) {
+  if (view.renderer.getContext().isContextLost()) throw new Error('GPU がリセットされました。数秒待ってからもう一度押してください');
+  return renderUnderdrawing(view, state.model, state.ud, exportSkeleton(), { longSide });
+}
+
+async function encodePng(width, height, rgba) {
+  const c = new OffscreenCanvas(width, height);
+  c.getContext('2d').putImageData(new ImageData(rgba, width, height), 0, 0);
+  return new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+}
+
+async function exportComposite() {
+  const r = renderExport(state.ud.longSide);
+  return { ...r, png: await encodePng(r.width, r.height, composeUnderdrawing(r.width, r.height, r.data, state.ud)) };
+}
+
+/** Lets the status line paint before a heavy export. */
+const breathe = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+async function runExport(label, fn) {
+  if (!Object.values(state.ud.layers).some(Boolean)) {
+    setStatus('書き出すレイヤーを 1 つ以上選んでください。');
+    return;
+  }
+  for (const id of ['udSave', 'udSaveLayers', 'udCopy']) $(id).disabled = true;
+  setStatus(`${label}…`);
+  await breathe();
+  try {
+    await fn();
+  } catch (e) {
+    setStatus(`書き出せませんでした: ${e.message}`);
+  } finally {
+    for (const id of ['udSave', 'udSaveLayers', 'udCopy']) $(id).disabled = false;
+  }
+}
+
+const saveUnderdrawing = () => runExport('下絵を書き出し中', async () => {
+  const r = await exportComposite();
+  const file = await api.saveUnderdrawing(exportName(), r.png);
+  setStatus(file ? `下絵を保存しました（${r.width}×${r.height}）: ${file}` : '保存をやめました。');
+});
+
+/** Every enabled layer as its own transparent PNG (plus the composite), for a paint app's layers. */
+const saveUnderdrawingLayers = () => runExport('レイヤーを書き出し中', async () => {
+  const r = renderExport(state.ud.longSide);
+  const files = [{ name: '00 合成', png: await encodePng(r.width, r.height, composeUnderdrawing(r.width, r.height, r.data, state.ud)) }];
+  let n = 1;
+  for (const layer of UnderLayers) {
+    if (!state.ud.layers[layer.id] || !r.data[layer.id]) continue;
+    const rgba = composeUnderdrawing(r.width, r.height, r.data, { ...state.ud, shadedOpacity: 1 }, { only: [layer.id], background: 'transparent' });
+    files.push({ name: `${String(n++).padStart(2, '0')} ${layer.shortJa}`, png: await encodePng(r.width, r.height, rgba) });
+  }
+  const dir = await api.saveUnderdrawingLayers(exportName(), files);
+  setStatus(dir ? `レイヤーを ${files.length} 枚保存しました: ${dir}` : '保存をやめました。');
+});
+
+const copyUnderdrawing = () => runExport('コピー中', async () => {
+  const r = await exportComposite();
+  await api.copyUnderdrawing(r.png);
+  setStatus(`下絵をクリップボードにコピーしました（${r.width}×${r.height}）。ペイントソフトに貼り付けられます。`);
+});
+
+const exportOpen = () => $('exportBox').open;
+
+/** Dashed frame over the view showing what "今の視点のまま" exports. */
+function placeExportFrame() {
+  const frame = $('exportFrame');
+  const show = exportOpen() && state.ud.framing === 'view';
+  frame.hidden = !show;
+  if (!show) return;
+  const c = $('view');
+  const f = frameInView(c.clientWidth, c.clientHeight, Aspects[state.ud.aspect].value);
+  Object.assign(frame.style, { left: `${f.x}px`, top: `${f.y}px`, width: `${f.width}px`, height: `${f.height}px` });
+}
+
+let previewTimer = 0;
+let previewKey = '';
+
+/** After each view render: keep the frame in place and refresh the preview when something changed. */
+function afterViewRender() {
+  placeExportFrame();
+  if (!exportOpen() || !state.poser) return;
+  const o = view.orbit;
+  const key = JSON.stringify([o.target.toArray(), o.yaw, o.pitch, o.dist, $('view').clientWidth, $('view').clientHeight, state.poseVersion, state.ud, state.modelName]);
+  if (key === previewKey) return;
+  previewKey = key;
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(drawPreview, 250);
+}
+
+function drawPreview() {
+  if (!exportOpen() || !state.poser) return;
+  try {
+    const r = renderExport(360);
+    const c = $('udPreview');
+    c.width = r.width;
+    c.height = r.height;
+    c.getContext('2d').putImageData(new ImageData(composeUnderdrawing(r.width, r.height, r.data, state.ud), r.width, r.height), 0, 0);
+  } catch (e) {
+    setStatus(`プレビューを作れませんでした: ${e.message}`);
+  }
+}
+
+function setupExport() {
+  const ud = state.ud;
+  for (const [key, a] of Object.entries(Aspects)) $('udAspect').append(new Option(a.labelJa, key));
+  for (const n of LongSides) $('udSize').append(new Option(`長辺 ${n}px`, String(n)));
+  const box = $('udLayers');
+  for (const layer of UnderLayers) {
+    const label = document.createElement('label');
+    label.className = 'check';
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.dataset.layer = layer.id;
+    input.checked = ud.layers[layer.id];
+    const sw = document.createElement('span');
+    sw.className = 'swatch';
+    sw.style.background = layer.color ?? 'linear-gradient(135deg, #f1e3cf, #b98f62)';
+    label.append(input, sw, layer.labelJa);
+    box.append(label);
+    input.addEventListener('change', () => {
+      ud.layers[layer.id] = input.checked;
+      view.requestRender();
+    });
+  }
+  const bind = (id, key, parse = (v) => v) => {
+    $(id).value = String(key === 'shadedOpacity' ? Math.round(ud[key] * 100) : ud[key]);
+    $(id).addEventListener(id === 'udShade' || id === 'udLine' ? 'input' : 'change', () => {
+      ud[key] = parse($(id).value);
+      showExportValues();
+      placeExportFrame();
+      view.requestRender();
+    });
+  };
+  bind('udFraming', 'framing');
+  bind('udAspect', 'aspect');
+  bind('udSize', 'longSide', Number);
+  bind('udShade', 'shadedOpacity', (v) => Number(v) / 100);
+  bind('udLine', 'lineWidth', Number);
+  bind('udBg', 'background');
+  showExportValues();
+  $('exportBox').addEventListener('toggle', () => {
+    placeExportFrame();
+    view.requestRender();
+  });
+  $('udSave').addEventListener('click', saveUnderdrawing);
+  $('udSaveLayers').addEventListener('click', saveUnderdrawingLayers);
+  $('udCopy').addEventListener('click', copyUnderdrawing);
+}
+
+function showExportValues() {
+  $('udShadeOut').textContent = `${Math.round(state.ud.shadedOpacity * 100)}%`;
+  $('udLineOut').textContent = `${state.ud.lineWidth}px`;
+}
+
 // ---------------------------------------------------------------- toolbar, keys, context
 
 function edit(fn, message) {
@@ -638,6 +824,7 @@ async function main() {
   setupPoseList();
   setupImage();
   setupDrop();
+  setupExport();
   setupToolbar();
   state.userPoses = await api.listPoses().catch(() => []);
   api.onPosesChanged((list) => {
@@ -667,4 +854,13 @@ window.__poseEditor = {
     return { x: s.x, y: s.y };
   },
   openImageBytes,
+  /** Underdrawing layers at a size, for tests: pixel counts per layer. */
+  underdrawing(longSide = 512) {
+    const r = renderExport(longSide);
+    const counts = {};
+    for (const [id, d] of Object.entries(r.data)) {
+      counts[id] = d.px ? d.px.reduce((n, v) => n + (v ? 1 : 0), 0) : d.reduce((n, v, i) => n + (i % 4 === 3 && v ? 1 : 0), 0);
+    }
+    return { width: r.width, height: r.height, counts };
+  },
 };

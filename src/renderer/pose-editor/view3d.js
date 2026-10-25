@@ -41,8 +41,11 @@ export class PoseView {
 
     this.overlay = new THREE.Group(); // skeleton lines and handles, drawn over the model
     this.scene.add(this.overlay);
+    // Starts with an (empty) position attribute: a line program without one fails to validate.
+    const boneGeometry = new THREE.BufferGeometry();
+    boneGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
     this.boneLines = new THREE.LineSegments(
-      new THREE.BufferGeometry(),
+      boneGeometry,
       new THREE.LineBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.55, depthTest: false }),
     );
     this.boneLines.renderOrder = 10;
@@ -55,7 +58,10 @@ export class PoseView {
     this.showSkeleton = true;
     new ResizeObserver(() => this.requestRender()).observe(canvas);
     // After a GPU reset three.js rebuilds its resources; only a redraw is needed.
-    canvas.addEventListener('webglcontextrestored', () => this.requestRender());
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.onRestored?.();
+      this.requestRender();
+    });
   }
 
   setModel(model, root) {
@@ -260,5 +266,6 @@ export class PoseView {
     this.sizeHandles();
     this.boneLines.visible = this.showSkeleton;
     this.renderer.render(this.scene, this.camera);
+    this.onRendered?.();
   }
 }

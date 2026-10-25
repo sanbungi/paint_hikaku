@@ -50,6 +50,7 @@
         <canvas id="refCanvas" aria-label="元の画像と検出した骨格"></canvas>
         <figcaption><span id="refName"></span> <button id="refClose" type="button" aria-label="参考画像を閉じる">×</button></figcaption>
       </figure>
+      <div id="exportFrame" class="export-frame" hidden></div>
       <div id="dropHint" class="drop-hint" hidden>画像をドロップしてポーズを推定 / VRM をドロップしてモデルを変える</div>
     </section>
 
@@ -103,6 +104,36 @@
           <progress id="modelProgress" max="1" value="0" hidden></progress>
         </div>
         <button id="detect" type="button" class="primary" disabled>推定してポーズにする</button>
+      </details>
+
+      <details id="exportBox">
+        <summary>下絵を書き出す</summary>
+        <label class="row">枠
+          <select id="udFraming" aria-label="書き出す範囲">
+            <option value="fit">人物に合わせて切り抜く</option>
+            <option value="view">今の視点のまま</option>
+          </select>
+        </label>
+        <div class="row">
+          <select id="udAspect" aria-label="縦横比"></select>
+          <select id="udSize" aria-label="大きさ（長辺）"></select>
+        </div>
+        <fieldset id="udLayers" class="layers"><legend>レイヤー</legend></fieldset>
+        <label class="row">陰影の濃さ <input type="range" id="udShade" min="10" max="100" step="5"><output id="udShadeOut"></output></label>
+        <label class="row">線の太さ <input type="range" id="udLine" min="1" max="12" step="0.5"><output id="udLineOut"></output></label>
+        <label class="row">背景
+          <select id="udBg" aria-label="背景">
+            <option value="white">白</option>
+            <option value="transparent">透明</option>
+          </select>
+        </label>
+        <canvas id="udPreview" class="preview" aria-label="下絵のプレビュー"></canvas>
+        <div class="row buttons">
+          <button id="udSave" type="button" class="primary" title="すべてのレイヤーを重ねた 1 枚の PNG">PNG で保存…</button>
+          <button id="udSaveLayers" type="button" title="レイヤーごとの透過 PNG を新しいフォルダーに保存（ペイントソフトのレイヤーに）">レイヤーごとに保存…</button>
+          <button id="udCopy" type="button" title="合成した画像をクリップボードへ">コピー</button>
+        </div>
+        <p class="help">今の視点（カメラの向きとパース）のまま書き出します。線画・外接箱・骨格・床と目線は下描き用のガイドです。</p>
       </details>
 
       <details>

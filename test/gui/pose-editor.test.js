@@ -237,3 +237,75 @@ test('GUI-POSE-STANDALONE: --pose-editor runs on its own and still saves poses',
   assert.equal(stored.poses.length, 1);
   assert.deepEqual(errors, []);
 });
+
+/** Width and height from a PNG's IHDR chunk. */
+const pngSize = (buf) => ({ width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) });
+
+test('GUI-POSE-UNDERDRAWING: export the posed figure as an underdrawing (PNG, layers, clipboard)', async (t) => {
+  const { app, page } = await launch(t);
+  await page.getByRole('option', { name: 'デッサン人形' }).click();
+  await page.waitForFunction(() => document.body.classList.contains('adjusting'));
+  const { editor, errors } = await openEditor(app, page);
+  const out = await fs.mkdtemp(path.join(os.tmpdir(), '下絵 test-'));
+  t.after(() => fs.rm(out, { recursive: true, force: true }));
+  await editor.locator('#builtinPoses').selectOption('walk');
+  await editor.getByLabel('名前').fill('歩く');
+  await editor.locator('#exportBox summary').click();
+
+  // Every layer has ink; the figure fills the crop when fitting.
+  for (const id of ['silhouette', 'box3d', 'skeleton']) await editor.locator(`#udLayers input[data-layer="${id}"]`).check();
+  const all = await editor.evaluate(() => window.__poseEditor.underdrawing(512));
+  assert.deepEqual([all.width, all.height], [384, 512], 'portrait 3:4');
+  for (const id of ['shaded', 'silhouette', 'floor', 'box3d', 'bbox', 'skeleton', 'lines']) {
+    assert.ok(all.counts[id] > 100, `${id} has ink (${all.counts[id]})`);
+  }
+  assert.ok(all.counts.silhouette > 384 * 512 * 0.12, `fit crop fills the frame (${all.counts.silhouette})`);
+  await editor.locator('#udFraming').selectOption('view');
+  assert.ok(await editor.locator('#exportFrame').isVisible(), 'the export frame shows on the view');
+  const inView = await editor.evaluate(() => window.__poseEditor.underdrawing(512));
+  assert.ok(inView.counts.silhouette < all.counts.silhouette, 'the view frame shows more around the figure');
+  await editor.locator('#udFraming').selectOption('fit');
+  assert.ok(!(await editor.locator('#exportFrame').isVisible()));
+  await editor.waitForFunction(() => document.getElementById('udPreview').width > 0);
+
+  // One PNG at the chosen size.
+  await editor.getByLabel('大きさ（長辺）').selectOption('1024');
+  const file = path.join(out, '歩く.png');
+  await app.evaluate(({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, file);
+  await editor.getByRole('button', { name: 'PNG で保存…' }).click();
+  await editor.waitForFunction(() => document.getElementById('status').textContent.includes('下絵を保存しました'));
+  assert.deepEqual(pngSize(await fs.readFile(file)), { width: 768, height: 1024 });
+
+  // One PNG per layer in a new folder each time.
+  await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }); }, out);
+  for (let i = 0; i < 2; i++) {
+    await editor.getByRole('button', { name: 'レイヤーごとに保存…' }).click();
+    await editor.waitForFunction(() => /レイヤーを \d+ 枚保存しました/.test(document.getElementById('status').textContent));
+    await editor.evaluate(() => { document.getElementById('status').textContent = ''; });
+  }
+  const files = (await fs.readdir(path.join(out, '歩く'))).sort();
+  assert.deepEqual(files, [
+    '00 合成.png', '01 陰影.png', '02 シルエット.png', '03 床と目線.png', '04 外接箱（立体）.png',
+    '05 外接箱（画面）.png', '06 骨格.png', '07 線画.png',
+  ]);
+  assert.ok((await fs.readdir(out)).includes('歩く (2)'), 'a second export does not overwrite the first');
+  const layer = await fs.readFile(path.join(out, '歩く', '07 線画.png'));
+  assert.deepEqual(pngSize(layer), { width: 768, height: 1024 });
+
+  // Clipboard.
+  await editor.getByRole('button', { name: 'コピー' }).click();
+  await editor.waitForFunction(() => /クリップボード|書き出せません/.test(document.getElementById('status').textContent));
+  assert.match(await text(editor, '#status'), /クリップボードにコピーしました/);
+  const clip = await app.evaluate(async ({ clipboard, nativeImage }) => {
+    const [item] = await clipboard.read();
+    const blob = await item.getType('image/png');
+    return nativeImage.createFromBuffer(Buffer.from(await blob.arrayBuffer())).getSize();
+  });
+  assert.deepEqual(clip, { width: 768, height: 1024 });
+
+  // Nothing to export.
+  for (const input of await editor.locator('#udLayers input').all()) await input.uncheck();
+  await editor.getByRole('button', { name: 'PNG で保存…' }).click();
+  assert.match(await text(editor, '#status'), /1 つ以上選んで/);
+  assert.deepEqual(errors, []);
+});

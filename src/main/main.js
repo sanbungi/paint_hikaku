@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, screen } from 'electron';
+import { app, BrowserWindow, clipboard, ClipboardItem, dialog, ipcMain, Menu, net, screen } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,7 @@ import { loadRecent, saveSession, sessionDir } from './history.js';
 import { loadUserPoses, saveUserPoses } from './userposes.js';
 import { downloadPoseModel, importPoseModel, readPoseModel } from './posemodel.js';
 import { validatePose } from '../engine/poses.js';
+import { safeFileName } from '../engine/underdrawing.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.join(here, '..', '..');
@@ -100,6 +101,37 @@ function registerPoseEditorIpc() {
     const file = await openFileOf(event, 'ポーズを読み込む', [{ name: 'ポーズ', extensions: ['json'] }]);
     if (!file) return null;
     return validatePose(JSON.parse(Buffer.from(file.data).toString('utf8')));
+  });
+  // Underdrawing export: one PNG, one PNG per layer in a new folder, or the clipboard.
+  ipcMain.handle('underdrawing:save', async (event, { name, png }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showSaveDialog(win, {
+      title: '下絵を保存',
+      defaultPath: `${safeFileName(name)}.png`,
+      filters: [{ name: 'PNG 画像', extensions: ['png'] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    await fs.writeFile(result.filePath, Buffer.from(png));
+    return result.filePath;
+  });
+  ipcMain.handle('underdrawing:save-layers', async (event, { name, files }) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(win, {
+      title: 'レイヤーを保存するフォルダーを選ぶ',
+      properties: ['openDirectory', 'createDirectory'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    // A new folder per export, so earlier exports are never overwritten.
+    const base = safeFileName(name);
+    let dir = path.join(result.filePaths[0], base);
+    for (let n = 2; await fs.stat(dir).then(() => true, () => false); n++) dir = path.join(result.filePaths[0], `${base} (${n})`);
+    await fs.mkdir(dir);
+    for (const f of files) await fs.writeFile(path.join(dir, `${safeFileName(f.name, 'layer')}.png`), Buffer.from(f.png));
+    return dir;
+  });
+  ipcMain.handle('underdrawing:copy', async (_event, png) => {
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([Buffer.from(png)], { type: 'image/png' }) })]);
+    return true;
   });
   ipcMain.handle('pose-image:open', (event) => openFileOf(event, 'ポーズの元にする画像を開く', ImageFilters));
   ipcMain.handle('posemodel:read', () => readPoseModel());

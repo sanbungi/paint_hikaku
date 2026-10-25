@@ -33,7 +33,7 @@ export async function loadVrm(bytes) {
 }
 
 /** Swaps every mesh material for `make(original)` while `fn` runs. */
-function withMaterials(root, make, fn) {
+export function withMaterials(root, make, fn) {
   const saved = [];
   root.traverse((o) => {
     if (!o.isMesh) return;
@@ -52,7 +52,7 @@ function withMaterials(root, make, fn) {
 }
 
 /** Keeps cut-out textures (hair cards, lashes) cut out in the data passes. */
-function cutout(original) {
+export function cutout(original) {
   const alphaTest = original.alphaTest > 0 ? original.alphaTest : (original.transparent && original.map ? 0.5 : 0);
   return { side: original.side ?? THREE.FrontSide, alphaTest, map: alphaTest ? original.map ?? null : null };
 }

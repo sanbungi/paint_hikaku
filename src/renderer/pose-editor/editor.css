@@ -121,4 +121,18 @@ progress { width: 100%; }
   .hint { display: none; }
 }
 [hidden] { display: none !important; }
+.export-frame {
+  position: absolute; pointer-events: none; border: 2px dashed var(--accent);
+  box-shadow: 0 0 0 9999px rgb(0 0 0 / 14%);
+}
+.layers { border: 1px solid var(--line); border-radius: 6px; padding: 0.3rem 0.5rem; margin: 0; display: grid; gap: 0.15rem; }
+.layers legend { color: var(--muted); font-size: 12px; padding: 0 0.2rem; }
+.layers .swatch { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; border: 1px solid rgb(0 0 0 / 25%); }
+.row input[type="range"] { flex: 1 1 auto; min-width: 0; }
+.row output { min-width: 2.8rem; text-align: right; font-variant-numeric: tabular-nums; }
+.preview {
+  display: block; width: 100%; height: auto; max-height: 260px; object-fit: contain;
+  border: 1px solid var(--line); border-radius: 4px;
+  background: repeating-conic-gradient(#e6e3dc 0 25%, #f6f4ef 0 50%) 0 0 / 14px 14px;
+}
 .row { white-space: nowrap; }

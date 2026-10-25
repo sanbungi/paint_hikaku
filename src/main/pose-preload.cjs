@@ -15,5 +15,8 @@ contextBridge.exposeInMainWorld('poseEditorApi', {
   readPoseModel: () => ipcRenderer.invoke('posemodel:read'),
   downloadPoseModel: () => ipcRenderer.invoke('posemodel:download'),
   choosePoseModel: () => ipcRenderer.invoke('posemodel:choose'),
+  saveUnderdrawing: (name, png) => ipcRenderer.invoke('underdrawing:save', { name, png }),
+  saveUnderdrawingLayers: (name, files) => ipcRenderer.invoke('underdrawing:save-layers', { name, files }),
+  copyUnderdrawing: (png) => ipcRenderer.invoke('underdrawing:copy', png),
   onPoseModelProgress: (cb) => ipcRenderer.on('posemodel:progress', (_e, ratio) => cb(ratio)),
 });
