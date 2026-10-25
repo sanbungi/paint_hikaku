@@ -26,6 +26,7 @@
     "dist:linux": "electron-builder --linux --x64 --publish never"
   },
   "devDependencies": {
+    "@mediapipe/tasks-vision": "1.1.1",
     "@pixiv/three-vrm": "3.5.5",
     "electron": "44.9.3",
     "electron-builder": "26.17.0",

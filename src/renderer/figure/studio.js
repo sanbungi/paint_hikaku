@@ -92,7 +92,7 @@ export class FigureStudio {
     this.model = null;
     this.mannequin = null; // kept so switching models does not reload them
     this.vrm = null; // the last loaded VRM
-    this.posed = null; // { model, poseId, box }
+    this.posed = null; // { model, data (the pose object), box }
     this.onRestored = null;
     // A GPU reset (sleep/resume, driver update) loses the context; three.js rebuilds its
     // resources on restore, the app only needs to redraw.
@@ -131,11 +131,13 @@ export class FigureStudio {
 
   /** Poses and grounds the model; the (per-vertex, slow) bounding box is cached per pose. */
   pose(poseId) {
-    if (this.posed?.poseId === poseId && this.posed.model === this.model) return this.posed.box;
+    // Keyed by the pose object too: re-saving a user pose replaces it.
+    const data = poseById(poseId);
+    if (this.posed?.data === data && this.posed.model === this.model) return this.posed.box;
     const { humanoid, scene } = this.model;
     scene.position.set(0, 0, 0);
     humanoid.resetNormalizedPose();
-    for (const [bone, [x, y, z]] of Object.entries(poseById(poseId).bones)) {
+    for (const [bone, [x, y, z]] of Object.entries(data.bones)) {
       humanoid.getNormalizedBoneNode(bone)?.quaternion.setFromEuler(new THREE.Euler(deg(x), deg(y), deg(z), 'XYZ'));
     }
     this.model.update();
@@ -145,7 +147,7 @@ export class FigureStudio {
     scene.position.y = -box.min.y;
     scene.updateMatrixWorld(true);
     box.translate(new THREE.Vector3(0, -box.min.y, 0));
-    this.posed = { model: this.model, poseId, box };
+    this.posed = { model: this.model, data, box };
     return box;
   }
 
